@@ -7,22 +7,56 @@
 
 import SwiftUI
 import SwiftData
+import CloudKit
 
 struct ContentView: View {
+    enum SidebarSelection: Hashable {
+        case authentication, images, keywordEdit, item(Item)
+    }
+    @State private var selection: SidebarSelection? = nil
+    
     @Environment(\.modelContext) private var modelContext
     @Query private var items: [Item]
+    
+    @State private var iCloudAvailable = false
+    @State private var checkingICloud = true
+    @State private var iCloudError: String?
+    @Environment(\.scenePhase) private var scenePhase
+    @EnvironmentObject var dropboxAuthManager: DropboxAuthManager
 
     var body: some View {
         NavigationSplitView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
+            if checkingICloud {
+                ProgressView("Checking iCloud status…")
+            }
+            Group {
+                List(selection: $selection) {
+                    NavigationLink("Authentication", value: SidebarSelection.authentication)
+                        .disabled(false)
+                    NavigationLink("Images", value: SidebarSelection.images)
+                        .disabled(!dropboxAuthManager.isAuthenticated)
+                    NavigationLink("Keyword edit", value: SidebarSelection.keywordEdit)
+                        .disabled(!dropboxAuthManager.isAuthenticated)
+#if os(macOS)
+                    Section(header: Text("Items")) {
+                        ForEach(items) { item in
+                            NavigationLink(value: SidebarSelection.item(item)) {
+                                Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
+                            }
+                            .disabled(!iCloudAvailable)
+                        }
+                        .onDelete(perform: deleteItems)
                     }
+#else
+                    ForEach(items) { item in
+                        NavigationLink(value: SidebarSelection.item(item)) {
+                            Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
+                        }
+                        .disabled(!iCloudAvailable)
+                    }
+                    .onDelete(perform: deleteItems)
+#endif
                 }
-                .onDelete(perform: deleteItems)
             }
 #if os(macOS)
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
@@ -39,8 +73,68 @@ struct ContentView: View {
                     }
                 }
             }
+            .task {
+                await checkICloudStatus()
+            }
+            .onChange(of: scenePhase) { newPhase in
+                if newPhase == .active {
+                    Task { await checkICloudStatus() }
+                }
+            }
         } detail: {
-            Text("Select an item")
+            switch selection {
+            case .authentication:
+                AuthenticationView(
+                    iCloudAvailable: iCloudAvailable,
+                    openICloudSettings: openICloudSettings
+                )
+            case .images:
+                ImagesView()
+            case .keywordEdit:
+                KeywordEditView()
+            case .item(let item):
+                Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
+            case nil:
+                Text("Select an item")
+            }
+        }
+    }
+    
+    private func checkICloudStatus() async {
+        checkingICloud = true
+        iCloudError = nil
+        do {
+            let status = try await CKContainer.default().accountStatus()
+            if status == .available {
+                iCloudAvailable = true
+            } else {
+                iCloudAvailable = false
+                switch status {
+                case .noAccount:
+                    iCloudError = "Sign in to your iCloud account to use this app."
+                case .restricted:
+                    iCloudError = "iCloud access is restricted."
+                case .couldNotDetermine:
+                    iCloudError = "Unable to determine iCloud account status."
+                default:
+                    iCloudError = "iCloud is not available."
+                }
+            }
+        } catch {
+            iCloudAvailable = false
+            iCloudError = "Error checking iCloud status: \(error.localizedDescription)"
+        }
+        checkingICloud = false
+
+        // Set initial selection based on authentication state
+        if dropboxAuthManager.isAuthenticated {
+            if selection != .images {
+                selection = .images
+            }
+        } else {
+            if selection != .authentication {
+                selection = .authentication
+            }
         }
     }
 
@@ -57,6 +151,18 @@ struct ContentView: View {
                 modelContext.delete(items[index])
             }
         }
+    }
+
+    private func openICloudSettings() {
+#if os(iOS)
+        if let url = URL(string: "App-Prefs:root=APPLE_ACCOUNT") {
+            UIApplication.shared.open(url)
+        }
+#elseif os(macOS)
+        if let url = URL(string: "x-apple.systempreferences:com.apple.AppleID-Account") {
+            NSWorkspace.shared.open(url)
+        }
+#endif
     }
 }
 

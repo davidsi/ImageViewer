@@ -7,9 +7,12 @@
 
 import SwiftUI
 import SwiftData
+import SwiftyDropbox
 
 @main
 struct ImageViewApp: App {
+    @StateObject private var dropboxAuthManager = DropboxAuthManager()
+    
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             Item.self,
@@ -26,6 +29,11 @@ struct ImageViewApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(dropboxAuthManager)
+                .onOpenURL { url in
+                    // Handle Dropbox OAuth callback
+                    _ = dropboxAuthManager.handleURL(url)
+                }
         }
         .modelContainer(sharedModelContainer)
     }

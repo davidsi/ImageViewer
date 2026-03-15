@@ -6,5 +6,21 @@
 	<array>
 		<string>remote-notification</string>
 	</array>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>dbapi-2</string>
+		<string>dbapi-8-emm</string>
+	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Dropbox OAuth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>db-p5vjk34y9h6ucmk</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>
