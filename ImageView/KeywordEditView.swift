@@ -16,6 +16,7 @@ struct KeywordEditView: View {
     @State private var isSaving = false
     @State private var lastSaveTime: Date?
     @State private var saveTask: Task<Void, Never>?
+    @State private var newlyCreatedKeywords: Set<String> = []
     
     var body: some View {
         VStack(spacing: 0) {
@@ -67,18 +68,6 @@ struct KeywordEditView: View {
                 // Keywords Tree Editor
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        // Add root keyword button
-                        HStack {
-                            Button(action: { addRootKeyword() }) {
-                                Label("Add Root Keyword", systemImage: "plus.circle.fill")
-                            }
-                            .buttonStyle(.bordered)
-                            
-                            Spacer()
-                        }
-                        .padding(.horizontal)
-                        .padding(.top)
-                        
                         // Keywords tree display
                         if keywordTree.children.isEmpty {
                             VStack {
@@ -88,14 +77,18 @@ struct KeywordEditView: View {
                                 Text("No keywords yet")
                                     .font(.headline)
                                     .padding(.top, 4)
-                                Text("Add your first keyword to get started")
-                                    .foregroundColor(.secondary)
+                                
+                                Button("Add your first keyword") {
+                                    addRootKeyword()
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .padding(.top, 8)
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .padding(.top, 60)
                         } else {
                             VStack(alignment: .leading, spacing: 4) {
-                                ForEach(keywordTree.children.keys.sorted(), id: \.self) { key in
+                                ForEach(keywordTree.children.keys.sorted(by: { $0.localizedStandardCompare($1) == .orderedAscending }), id: \.self) { key in
                                     KeywordNodeView(
                                         keyword: key,
                                         node: Binding(
@@ -105,7 +98,9 @@ struct KeywordEditView: View {
                                         level: 0,
                                         onDelete: { deleteRootKeyword(key) },
                                         onRename: { oldName, newName in renameRootKeyword(from: oldName, to: newName) },
-                                        onNodeChanged: { markAsChanged() }
+                                        onNodeChanged: { markAsChanged() },
+                                        startEditingAutomatically: newlyCreatedKeywords.contains(key),
+                                        markAsNewlyCreated: markKeywordAsNewlyCreated
                                     )
                                 }
                             }
@@ -176,40 +171,28 @@ struct KeywordEditView: View {
             isSaving = true
         }
         
+        print("🔄 Keywords: Starting save operation...")
+        debugPrintKeywordTree(keywordTree)
+        
         do {
             try await dropboxService.saveKeywords(keywordTree)
             await MainActor.run {
                 lastSaveTime = Date()
                 isSaving = false
             }
-            print("📱 Keywords: Successfully saved keyword tree")
-            debugPrintKeywordTree(keywordTree)
+            print("✅ Keywords: Save completed successfully")
         } catch {
             await MainActor.run {
                 isSaving = false
                 // Could show an alert here
             }
-            print("❌ Failed to save keywords: \(error)")
+            print("❌ Keywords: Save failed with error: \(error)")
         }
     }
     
     private func createNewKeywordsFile() {
         keywordTree = KeywordTree()
         errorMessage = nil
-        markAsChanged()
-    }
-    
-    private func addRootKeyword() {
-        let newName = "New Keyword"
-        var finalName = newName
-        var counter = 1
-        
-        while keywordTree.children.keys.contains(finalName) {
-            finalName = "\(newName) \(counter)"
-            counter += 1
-        }
-        
-        keywordTree.children[finalName] = KeywordTreeNode()
         markAsChanged()
     }
     
@@ -229,16 +212,23 @@ struct KeywordEditView: View {
     }
     
     private func markAsChanged() {
+        print("🔄 Keywords: markAsChanged() called - scheduling save")
+        
         // Cancel any pending save operation
         saveTask?.cancel()
         
         // Debounce save operations to prevent excessive API calls
         saveTask = Task {
+            print("🔄 Keywords: Starting 500ms debounce delay...")
             try? await Task.sleep(for: .milliseconds(500)) // Wait 500ms
             
             // Check if task was cancelled during sleep
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else { 
+                print("🔄 Keywords: Save task was cancelled")
+                return 
+            }
             
+            print("🔄 Keywords: Debounce delay completed, triggering save")
             await saveKeywords()
         }
     }
@@ -260,6 +250,29 @@ struct KeywordEditView: View {
         }
     }
     
+    private func markKeywordAsNewlyCreated(_ keyword: String) {
+        newlyCreatedKeywords.insert(keyword)
+        // Clear after a delay to prevent the auto-editing from persisting too long
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            newlyCreatedKeywords.remove(keyword)
+        }
+    }
+    
+    private func addRootKeyword() {
+        let newName = "New Keyword"
+        var finalName = newName
+        var counter = 1
+        
+        while keywordTree.children.keys.contains(finalName) {
+            finalName = "\(newName) \(counter)"
+            counter += 1
+        }
+        
+        keywordTree.children[finalName] = KeywordTreeNode()
+        markKeywordAsNewlyCreated(finalName)
+        markAsChanged()
+    }
+    
     private func debugPrintKeywordTree(_ tree: KeywordTree) {
         print("📱 Keywords: Tree structure with image references:")
         debugPrintNode(tree.children, level: 0)
@@ -267,7 +280,7 @@ struct KeywordEditView: View {
     
     private func debugPrintNode(_ children: [String: KeywordTreeNode], level: Int) {
         let indent = String(repeating: "  ", count: level)
-        for (key, node) in children.sorted(by: { $0.key < $1.key }) {
+        for (key, node) in children.sorted(by: { $0.key.localizedStandardCompare($1.key) == .orderedAscending }) {
             let imageCount = node.imageFilenames?.count ?? 0
             print("\(indent)- '\(key)' (\(imageCount) images)")
             if let imageFilenames = node.imageFilenames, !imageFilenames.isEmpty {
@@ -311,11 +324,14 @@ struct KeywordNodeView: View {
     let onDelete: () -> Void
     let onRename: (String, String) -> Void
     let onNodeChanged: () -> Void
+    let startEditingAutomatically: Bool
+    let markAsNewlyCreated: ((String) -> Void)?
     
     @State private var isExpanded = true
     @State private var isEditing = false
     @State private var editingName = ""
     @State private var showingDeleteAlert = false
+    @FocusState private var isTextFieldFocused: Bool
     
     private var indentWidth: CGFloat {
         CGFloat(level * 20)
@@ -351,11 +367,16 @@ struct KeywordNodeView: View {
                 if isEditing {
                     TextField("Keyword name", text: $editingName)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .focused($isTextFieldFocused)
                         .onSubmit {
                             finishEditing()
                         }
                         .onAppear {
                             editingName = keyword
+                            // Focus and select all text
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                isTextFieldFocused = true
+                            }
                         }
                 } else {
                     Text(keyword)
@@ -390,7 +411,7 @@ struct KeywordNodeView: View {
             // Children (if expanded)
             if isExpanded && !node.children.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(node.children.keys.sorted(), id: \.self) { childKey in
+                    ForEach(node.children.keys.sorted(by: { $0.localizedStandardCompare($1) == .orderedAscending }), id: \.self) { childKey in
                         KeywordNodeView(
                             keyword: childKey,
                             node: Binding(
@@ -400,7 +421,9 @@ struct KeywordNodeView: View {
                             level: level + 1,
                             onDelete: { deleteChild(childKey) },
                             onRename: { oldName, newName in renameChild(from: oldName, to: newName) },
-                            onNodeChanged: onNodeChanged
+                            onNodeChanged: onNodeChanged,
+                            startEditingAutomatically: childKey.hasPrefix("New Keyword"),  // Auto-edit if it's a newly created keyword
+                            markAsNewlyCreated: markAsNewlyCreated
                         )
                     }
                 }
@@ -413,6 +436,13 @@ struct KeywordNodeView: View {
             }
         } message: {
             Text("Are you sure you want to delete '\(keyword)' and all its sub-keywords? This action cannot be undone.")
+        }
+        .onAppear {
+            if startEditingAutomatically {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    startEditing()
+                }
+            }
         }
     }
     
@@ -441,6 +471,12 @@ struct KeywordNodeView: View {
         
         node.children[finalName] = KeywordTreeNode()
         isExpanded = true // Expand to show the new child
+        
+        // Mark the new keyword for auto-editing if at root level
+        if level == 0 {
+            markAsNewlyCreated?(finalName)
+        }
+        
         onNodeChanged()
     }
     

@@ -53,6 +53,36 @@ struct ImagesView: View {
     }
     
     var body: some View {
+#if os(macOS)
+        HSplitView {
+            // Keywords Sidebar
+            KeywordsSidebarView(
+                availableKeywords: availableKeywords,
+                selectedKeywords: $selectedKeywords,
+                searchText: $searchText
+            )
+            .frame(minWidth: 200, maxWidth: 300)
+            
+            // Main Images View
+            ImagesMainView(
+                filteredImages: filteredImages,
+                isLoading: isLoading,
+                errorMessage: errorMessage,
+                searchText: $searchText,
+                selectedKeywords: $selectedKeywords,
+                gridColumns: gridColumns,
+                loadImagesAction: { Task { await loadImages() } }
+            )
+        }
+        .navigationTitle("Images")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                RefreshButton(isLoading: isLoading) {
+                    Task { await loadImages() }
+                }
+            }
+        }
+#else
         NavigationView {
             VStack(spacing: 0) {
                 // Search and Filter Controls
@@ -88,105 +118,34 @@ struct ImagesView: View {
                 Divider()
                 
                 // Main Content
-                if isLoading && images.isEmpty {
-                    VStack {
-                        ProgressView()
-                        Text("Loading images from Dropbox...")
-                            .padding(.top, 8)
-                            .foregroundColor(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let errorMessage = errorMessage {
-                    VStack {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.largeTitle)
-                            .foregroundColor(.red)
-                        Text("Error")
-                            .font(.headline)
-                            .padding(.top, 4)
-                        Text(errorMessage)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                        
-                        Button("Retry") {
-                            Task { await loadImages() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .padding(.top)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if filteredImages.isEmpty && !images.isEmpty {
-                    VStack {
-                        Image(systemName: "photo.on.rectangle")
-                            .font(.largeTitle)
-                            .foregroundColor(.secondary)
-                        Text("No images match your search")
-                            .font(.headline)
-                            .padding(.top, 4)
-                        if !searchText.isEmpty || !selectedKeywords.isEmpty {
-                            Button("Clear Filters") {
-                                searchText = ""
-                                selectedKeywords = []
-                            }
-                            .buttonStyle(.bordered)
-                            .padding(.top)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if filteredImages.isEmpty {
-                    VStack {
-                        Image(systemName: "photo")
-                            .font(.largeTitle)
-                            .foregroundColor(.secondary)
-                        Text("No images found")
-                            .font(.headline)
-                            .padding(.top, 4)
-                        Text("Make sure you have images in your Dropbox folder 'Apps/InspirationViewer'")
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                            .foregroundColor(.secondary)
-                        
-                        Button("Refresh") {
-                            Task { await loadImages() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .padding(.top)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    // Images Grid
-                    ScrollView {
-                        LazyVGrid(columns: gridColumns, spacing: 16) {
-                            ForEach(filteredImages, id: \.filename) { imageMetadata in
-                                ImageTileView(metadata: imageMetadata)
-                            }
-                        }
-                        .padding()
-                    }
-                }
+                ImagesMainView(
+                    filteredImages: filteredImages,
+                    isLoading: isLoading,
+                    errorMessage: errorMessage,
+                    searchText: $searchText,
+                    selectedKeywords: $selectedKeywords,
+                    gridColumns: gridColumns,
+                    loadImagesAction: { Task { await loadImages() } }
+                )
             }
             .navigationTitle("Images")
-#if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-#endif
             .toolbar {
-#if os(iOS)
                 ToolbarItem(placement: .navigationBarTrailing) {
                     RefreshButton(isLoading: isLoading) {
                         Task { await loadImages() }
                     }
                 }
-#else
-                ToolbarItem(placement: .primaryAction) {
-                    RefreshButton(isLoading: isLoading) {
-                        Task { await loadImages() }
-                    }
-                }
-#endif
             }
         }
+#endif
         .task {
             await loadImages()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .imagesDidUpdate)) { _ in
+            Task {
+                await loadImages()
+            }
         }
     }
     

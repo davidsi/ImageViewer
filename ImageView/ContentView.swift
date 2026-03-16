@@ -8,10 +8,11 @@
 import SwiftUI
 import SwiftData
 import CloudKit
+import Photos
 
 struct ContentView: View {
     enum SidebarSelection: Hashable {
-        case authentication, images, keywordEdit, item(Item)
+        case authentication, images, keywordEdit, iCloudPhotos, item(Item)
     }
     @State private var selection: SidebarSelection? = nil
     
@@ -37,6 +38,8 @@ struct ContentView: View {
                         .disabled(!dropboxAuthManager.isAuthenticated)
                     NavigationLink("Keyword edit", value: SidebarSelection.keywordEdit)
                         .disabled(!dropboxAuthManager.isAuthenticated)
+                    NavigationLink("iCloud Photos", value: SidebarSelection.iCloudPhotos)
+                        .disabled(!iCloudAvailable)
 #if os(macOS)
                     Section(header: Text("Items")) {
                         ForEach(items) { item in
@@ -92,6 +95,8 @@ struct ContentView: View {
                 ImagesView()
             case .keywordEdit:
                 KeywordEditView()
+            case .iCloudPhotos:
+                iCloudPhotosView()
             case .item(let item):
                 Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
             case nil:

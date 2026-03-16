@@ -15,10 +15,60 @@ typealias Files = SwiftyDropbox.Files
 class DropboxService: ObservableObject {
     static let shared = DropboxService()
     
-    private let inspirationFolder = "/Apps/InspirationViewer"
+    private let inspirationFolder = ""  // Root of app's allocated space
     private let keywordsFileName = "keywords.json"
+    private let userSettings = UserSettings.shared
     
     private init() {}
+    
+    /// Constructs a proper Dropbox path by joining components
+    private func dropboxPath(_ components: String...) -> String {
+        let nonEmptyComponents = components.filter { !$0.isEmpty }
+        let joinedPath = nonEmptyComponents.joined(separator: "/")
+        
+        // Dropbox API requires paths to start with "/"
+        if joinedPath.isEmpty {
+            return "/"
+        } else {
+            return "/\(joinedPath)"
+        }
+    }
+    
+    // MARK: - Token Management
+    
+    private func handleExpiredToken() async throws {
+        print("📂 Dropbox: Handling expired token - clearing client and requiring re-authentication")
+        
+        await MainActor.run {
+            // Clear the current authentication state
+            userSettings.clearDropboxCredentials()
+            DropboxClientsManager.unlinkClients() 
+            DropboxClientsManager.authorizedClient = nil
+        }
+        
+        // Throw specific token expired error for better UI handling
+        throw DropboxError.tokenExpired
+    }
+    
+    private func isExpiredTokenError(_ error: Error) -> Bool {
+        let errorString = String(describing: error)
+        return errorString.contains("expired_access_token") || errorString.contains("invalid_access_token")
+    }
+    
+    private func executeWithTokenRefresh<T>(_ operation: @escaping () async throws -> T) async throws -> T {
+        do {
+            return try await operation()
+        } catch {
+            if isExpiredTokenError(error) {
+                print("📂 Dropbox: Detected expired token, clearing authentication state...")
+                try await handleExpiredToken()
+                // Re-throw the specific token expired error for the UI to handle
+                throw DropboxError.tokenExpired
+            } else {
+                throw error
+            }
+        }
+    }
     
     // Test basic connectivity to Dropbox
     func testConnectivity() async -> Bool {
@@ -77,63 +127,49 @@ class DropboxService: ObservableObject {
     // MARK: - File Listing
     
     func fetchImageList() async throws -> [ImageMetadata] {
-        guard let client = DropboxClientsManager.authorizedClient else {
-            print("❌ Dropbox: No authorized client available")
-            throw DropboxError.notAuthenticated
-        }
-        
-        print("📂 Dropbox: Client exists, fetching files from \(self.inspirationFolder)")
-        print("📂 Dropbox: Client description: \(String(describing: client))")
-        
-        // First try to list the folder, if it fails, try to create it
-        return try await withCheckedThrowingContinuation { continuation in
-            client.files.listFolder(path: self.inspirationFolder).response { result, error in
-                if let result = result {
-                    let imageMetadata = self.processFileList(result.entries)
-                    print("📂 Dropbox: Found \(imageMetadata.count) images")
-                    continuation.resume(returning: imageMetadata)
-                } else if let error = error {
-                    print("📂 Dropbox: Error listing files: \(error)")
-                    print("📂 Dropbox: Error type: \(type(of: error))")
-                    print("📂 Dropbox: Error localizedDescription: \(error.localizedDescription)")
-                    
-                    // Check if it's a "not found" error and try to create the folder
-                    let errorString = error.description
-                    if errorString.contains("not_found") {
-                        print("📂 Dropbox: Folder not found, attempting to create it...")
-                        self.createFolderAndRetry(client: client, continuation: continuation)
+        return try await executeWithTokenRefresh {
+            guard let client = DropboxClientsManager.authorizedClient else {
+                print("❌ Dropbox: No authorized client available")
+                throw DropboxError.notAuthenticated
+            }
+            
+            print("📂 Dropbox: Client exists, fetching files from \(self.inspirationFolder)")
+            print("📂 Dropbox: Client description: \(String(describing: client))")
+            
+            // First try to list the folder, if it fails, try to create it
+            return try await withCheckedThrowingContinuation { continuation in
+                client.files.listFolder(path: self.inspirationFolder.isEmpty ? "" : self.inspirationFolder).response { result, error in
+                    if let result = result {
+                        let imageMetadata = self.processFileList(result.entries)
+                        print("📂 Dropbox: Found \(imageMetadata.count) images")
+                        continuation.resume(returning: imageMetadata)
+                    } else if let error = error {
+                        print("📂 Dropbox: Error listing files: \(error)")
+                        print("📂 Dropbox: Error type: \(type(of: error))")
+                        print("📂 Dropbox: Error localizedDescription: \(error.localizedDescription)")
+                        
+                        // Check if it's a "not found" error and try to create the folder
+                        let errorString = error.description
+                        if errorString.contains("not_found") {
+                            print("📂 Dropbox: Folder not found, attempting to create it...")
+                            self.createFolderAndRetry(client: client, continuation: continuation)
+                        } else {
+                            continuation.resume(throwing: DropboxError.apiError(error.description))
+                        }
                     } else {
-                        continuation.resume(throwing: DropboxError.apiError(error.description))
+                        print("📂 Dropbox: Unknown error - no result and no error")
+                        continuation.resume(throwing: DropboxError.unknown)
                     }
-                } else {
-                    print("📂 Dropbox: Unknown error - no result and no error")
-                    continuation.resume(throwing: DropboxError.unknown)
                 }
             }
         }
     }
     
     private func createFolderAndRetry(client: DropboxClient, continuation: CheckedContinuation<[ImageMetadata], Error>) {
-        client.files.createFolderV2(path: self.inspirationFolder).response { result, error in
-            if let result = result {
-                print("📂 Dropbox: Successfully created folder: \(result.metadata.pathDisplay ?? self.inspirationFolder)")
-                // Folder created, now try listing again (should be empty)
-                continuation.resume(returning: [])
-            } else if let error = error {
-                print("📂 Dropbox: Failed to create folder: \(error)")
-                
-                // Check if folder already exists (race condition)
-                let errorString = error.description
-                if errorString.contains("path_already_exists") {
-                    print("📂 Dropbox: Folder already exists, returning empty list")
-                    continuation.resume(returning: [])
-                } else {
-                    continuation.resume(throwing: DropboxError.apiError("Failed to access or create folder: \(error.description)"))
-                }
-            } else {
-                continuation.resume(throwing: DropboxError.unknown)
-            }
-        }
+        // Since we're using the root of the app space, the folder already exists
+        // Just return empty list for a clean start
+        print("📂 Dropbox: Using app root space, no need to create folder")
+        continuation.resume(returning: [])
     }
     
     private func processFileList(_ entries: [Files.Metadata]) -> [ImageMetadata] {
@@ -180,29 +216,47 @@ class DropboxService: ObservableObject {
     // MARK: - Keywords
     
     func fetchKeywords() async throws -> KeywordTree {
-        guard let client = DropboxClientsManager.authorizedClient else {
-            throw DropboxError.notAuthenticated
-        }
-        
-        let keywordsPath = "\(self.inspirationFolder)/\(self.keywordsFileName)"
-        print("📂 Dropbox: Fetching keywords from \(keywordsPath)")
-        
-        return try await withCheckedThrowingContinuation { continuation in
-            client.files.download(path: keywordsPath).response { result, error in
-                if let result = result {
-                    do {
-                        let keywords = try JSONDecoder().decode(KeywordTree.self, from: result.1)
-                        print("📂 Dropbox: Successfully loaded keywords")
-                        continuation.resume(returning: keywords)
-                    } catch {
-                        print("📂 Dropbox: Error parsing keywords JSON: \(error)")
-                        continuation.resume(throwing: DropboxError.apiError("Invalid keywords file format"))
+        return try await executeWithTokenRefresh {
+            guard let client = DropboxClientsManager.authorizedClient else {
+                throw DropboxError.notAuthenticated
+            }
+            
+            let keywordsPath = self.dropboxPath(self.inspirationFolder, self.keywordsFileName)
+            print("📂 Dropbox: Fetching keywords from '\(keywordsPath)'")
+            
+            return try await withCheckedThrowingContinuation { continuation in
+                client.files.download(path: keywordsPath).response { result, error in
+                    if let result = result {
+                        do {
+                            let keywords = try JSONDecoder().decode(KeywordTree.self, from: result.1)
+                            print("📂 Dropbox: Successfully loaded keywords")
+                            continuation.resume(returning: keywords)
+                        } catch {
+                            print("📂 Dropbox: Error parsing keywords JSON: \(error)")
+                            continuation.resume(throwing: DropboxError.apiError("Invalid keywords file format"))
+                        }
+                    } else if let error = error {
+                        print("📂 Dropbox: Keywords file not found: \(error)")
+                        print("📂 Dropbox: Creating default keywords file with root 'keywords' node")
+                        
+                        // Create default keywords tree with root "keywords" node
+                        var defaultTree = KeywordTree()
+                        defaultTree.children["keywords"] = KeywordTreeNode()
+                        
+                        continuation.resume(returning: defaultTree)
+                        
+                        // Save the default tree to Dropbox asynchronously (don't wait for it)
+                        Task {
+                            do {
+                                try await self.saveKeywords(defaultTree)
+                                print("📂 Dropbox: Successfully created default keywords file")
+                            } catch {
+                                print("📂 Dropbox: Failed to create default keywords file: \(error)")
+                            }
+                        }
+                    } else {
+                        continuation.resume(throwing: DropboxError.unknown)
                     }
-                } else if let error = error {
-                    print("📂 Dropbox: Keywords file not found: \(error)")
-                    continuation.resume(throwing: DropboxError.apiError("Keywords file not found"))
-                } else {
-                    continuation.resume(throwing: DropboxError.unknown)
                 }
             }
         }
@@ -211,56 +265,129 @@ class DropboxService: ObservableObject {
     // MARK: - Keywords Save
     
     func saveKeywords(_ keywordTree: KeywordTree) async throws {
-        guard let client = DropboxClientsManager.authorizedClient else {
-            throw DropboxError.notAuthenticated
+        try await executeWithTokenRefresh {
+            guard let client = DropboxClientsManager.authorizedClient else {
+                print("📂 Dropbox: Not authenticated, cannot save keywords")
+                throw DropboxError.notAuthenticated
+            }
+            
+            let keywordsPath = self.dropboxPath(self.inspirationFolder, self.keywordsFileName)
+            print("📂 Dropbox: Attempting to save keywords to path: '\(keywordsPath)'")
+            print("📂 Dropbox: Folder: '\(self.inspirationFolder)', Filename: '\(self.keywordsFileName)'")
+            
+            do {
+                let jsonData = try JSONEncoder().encode(keywordTree)
+                print("📂 Dropbox: Encoded \(jsonData.count) bytes of keyword data")
+                
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    print("📂 Dropbox: Starting upload to '\(keywordsPath)'...")
+                    client.files.upload(
+                        path: keywordsPath,
+                        mode: Files.WriteMode.overwrite,
+                        input: jsonData
+                    ).response { result, error in
+                        if let result = result {
+                            print("📂 Dropbox: Upload completed successfully")
+                            print("📂 Dropbox: Result details: \(result)")
+                            continuation.resume()
+                        } else if let error = error {
+                            print("📂 Dropbox: Upload failed with error: \(error)")
+                            continuation.resume(throwing: DropboxError.apiError(error.description))
+                        } else {
+                            print("📂 Dropbox: Upload failed with unknown error")
+                            continuation.resume(throwing: DropboxError.unknown)
+                        }
+                    }
+                }
+                print("📂 Dropbox: Keywords save operation completed successfully")
+            } catch {
+                print("📂 Dropbox: Keywords save failed: \(error.localizedDescription)")
+                throw DropboxError.apiError("Failed to encode keywords: \(error.localizedDescription)")
+            }
         }
-        
-        let keywordsPath = "\(self.inspirationFolder)/\(self.keywordsFileName)"
-        print("📂 Dropbox: Saving keywords to \(keywordsPath)")
-        
-        do {
-            let jsonData = try JSONEncoder().encode(keywordTree)
+    }
+    
+    // MARK: - Image Upload
+    
+    func uploadImage(imageData: Data, filename: String, title: String?) async throws -> String {
+        return try await executeWithTokenRefresh {
+            guard let client = DropboxClientsManager.authorizedClient else {
+                throw DropboxError.notAuthenticated
+            }
+            
+            // Resolve filename conflicts
+            let finalFilename = try await self.resolveFilenameConflict(filename: filename)
+            let dropboxPath = self.dropboxPath(self.inspirationFolder, finalFilename)
+            
+            print("📤 Dropbox: Uploading \(finalFilename) (\(imageData.count) bytes)")
             
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                client.files.upload(path: keywordsPath, input: jsonData).response { result, error in
+                client.files.upload(
+                    path: dropboxPath,
+                    mode: Files.WriteMode.overwrite,
+                    input: imageData
+                ).response { result, error in
                     if let result = result {
-                        print("📂 Dropbox: Successfully saved keywords")
+                        print("📤 Dropbox: Successfully uploaded \(finalFilename)")
                         continuation.resume()
                     } else if let error = error {
-                        print("📂 Dropbox: Error saving keywords: \(error)")
+                        print("📤 Dropbox: Error uploading \(finalFilename): \(error)")
                         continuation.resume(throwing: DropboxError.apiError(error.description))
                     } else {
                         continuation.resume(throwing: DropboxError.unknown)
                     }
                 }
             }
-        } catch {
-            throw DropboxError.apiError("Failed to encode keywords: \(error.localizedDescription)")
+            
+            return finalFilename
         }
+    }
+    
+    private func resolveFilenameConflict(filename: String) async throws -> String {
+        let existingFiles = try await fetchImageList()
+        let existingFilenames = Set(existingFiles.map { $0.filename })
+        
+        var finalFilename = filename
+        var counter = 1
+        
+        // Extract name and extension
+        let nameComponents = filename.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
+        let baseName = String(nameComponents.first ?? "")
+        let fileExtension = nameComponents.count > 1 ? ".\(nameComponents[1])" : ""
+        
+        // Keep trying with incremented numbers until we find a unique name
+        while existingFilenames.contains(finalFilename) {
+            finalFilename = "\(baseName)-\(counter)\(fileExtension)"
+            counter += 1
+        }
+        
+        return finalFilename
     }
     
     // MARK: - Image Download
     
     func downloadImage(metadata: ImageMetadata, to localURL: URL) async throws {
-        guard let client = DropboxClientsManager.authorizedClient else {
-            throw DropboxError.notAuthenticated
-        }
-        
-        print("📥 Dropbox: Downloading \(metadata.filename)")
-        
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            client.files.download(path: metadata.dropboxPath, overwrite: true, destination: localURL)
-                .response { result, error in
-                    if let result = result {
-                        print("📥 Dropbox: Successfully downloaded \(metadata.filename)")
-                        continuation.resume()
-                    } else if let error = error {
-                        print("📥 Dropbox: Error downloading \(metadata.filename): \(error)")
-                        continuation.resume(throwing: DropboxError.downloadFailed(error.description))
-                    } else {
-                        continuation.resume(throwing: DropboxError.unknown)
+        try await executeWithTokenRefresh {
+            guard let client = DropboxClientsManager.authorizedClient else {
+                throw DropboxError.notAuthenticated
+            }
+            
+            print("📥 Dropbox: Downloading \(metadata.filename)")
+            
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                client.files.download(path: metadata.dropboxPath, overwrite: true, destination: localURL)
+                    .response { result, error in
+                        if let result = result {
+                            print("📥 Dropbox: Successfully downloaded \(metadata.filename)")
+                            continuation.resume()
+                        } else if let error = error {
+                            print("📥 Dropbox: Error downloading \(metadata.filename): \(error)")
+                            continuation.resume(throwing: DropboxError.downloadFailed(error.description))
+                        } else {
+                            continuation.resume(throwing: DropboxError.unknown)
+                        }
                     }
-                }
+            }
         }
     }
     
@@ -321,17 +448,20 @@ enum DropboxError: Error, LocalizedError {
     case apiError(String)
     case downloadFailed(String)
     case unknown
+    case tokenExpired
     
     var errorDescription: String? {
         switch self {
         case .notAuthenticated:
-            return "Not authenticated with Dropbox"
+            return "Please sign in to Dropbox to continue"
         case .apiError(let message):
             return "Dropbox API error: \(message)"
         case .downloadFailed(let message):
-            return "Failed to download file: \(message)"
+            return "Download failed: \(message)"
         case .unknown:
-            return "Unknown Dropbox error"
+            return "An unknown Dropbox error occurred"
+        case .tokenExpired:
+            return "Your Dropbox session has expired. Please sign in again."
         }
     }
 }
