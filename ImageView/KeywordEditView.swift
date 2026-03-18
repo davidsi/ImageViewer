@@ -88,18 +88,22 @@ struct KeywordEditView: View {
                             .padding(.top, 60)
                         } else {
                             VStack(alignment: .leading, spacing: 4) {
-                                ForEach(keywordTree.children.keys.sorted(by: { $0.localizedStandardCompare($1) == .orderedAscending }), id: \.self) { key in
+                                ForEach(keywordTree.children, id: \.name) { node in
                                     KeywordNodeView(
-                                        keyword: key,
+                                        keyword: node.name,
                                         node: Binding(
-                                            get: { keywordTree.children[key] ?? KeywordTreeNode() },
-                                            set: { keywordTree.children[key] = $0 }
+                                            get: { node },
+                                            set: { newNode in
+                                                if let index = keywordTree.children.firstIndex(where: { $0.name == node.name }) {
+                                                    keywordTree.children[index] = newNode
+                                                }
+                                            }
                                         ),
                                         level: 0,
-                                        onDelete: { deleteRootKeyword(key) },
+                                        onDelete: { deleteRootKeyword(node.name) },
                                         onRename: { oldName, newName in renameRootKeyword(from: oldName, to: newName) },
                                         onNodeChanged: { markAsChanged() },
-                                        startEditingAutomatically: newlyCreatedKeywords.contains(key),
+                                        startEditingAutomatically: newlyCreatedKeywords.contains(node.name),
                                         markAsNewlyCreated: markKeywordAsNewlyCreated
                                     )
                                 }
@@ -155,7 +159,7 @@ struct KeywordEditView: View {
                 keywordTree = loadedTree
                 isLoading = false
             }
-            print("📱 Keywords: Loaded keyword tree with \(loadedTree.children.count) root nodes")
+                print("📱 Keywords: Loaded keyword tree with \(loadedTree.children.count) root nodes")
             debugPrintKeywordTree(keywordTree)
         } catch {
             await MainActor.run {
@@ -197,16 +201,19 @@ struct KeywordEditView: View {
     }
     
     private func deleteRootKeyword(_ keyword: String) {
-        keywordTree.children.removeValue(forKey: keyword)
+        // Remove from array-based structure
+        keywordTree.children.removeAll { node in
+            node.name == keyword
+        }
         markAsChanged()
     }
     
     private func renameRootKeyword(from oldName: String, to newName: String) {
         guard oldName != newName else { return }
         
-        if let node = keywordTree.children[oldName] {
-            keywordTree.children.removeValue(forKey: oldName)
-            keywordTree.children[newName] = node
+        // Find and update in array-based structure
+        if let index = keywordTree.children.firstIndex(where: { $0.name == oldName }) {
+            keywordTree.children[index].name = newName
             markAsChanged()
         }
     }
@@ -263,30 +270,33 @@ struct KeywordEditView: View {
         var finalName = newName
         var counter = 1
         
-        while keywordTree.children.keys.contains(finalName) {
+        // Check if name exists in array-based structure
+        while keywordTree.children.contains(where: { $0.name == finalName }) {
             finalName = "\(newName) \(counter)"
             counter += 1
         }
         
-        keywordTree.children[finalName] = KeywordTreeNode()
+        // Add to array-based structure
+        keywordTree.children.append(KeywordTreeNode(name: finalName, images: [], children: []))
         markKeywordAsNewlyCreated(finalName)
         markAsChanged()
     }
     
+    // MARK: - Debug print support functions
     private func debugPrintKeywordTree(_ tree: KeywordTree) {
         print("📱 Keywords: Tree structure with image references:")
-        debugPrintNode(tree.children, level: 0)
+        debugPrintNodeArray(tree.children, level: 0)
     }
     
-    private func debugPrintNode(_ children: [String: KeywordTreeNode], level: Int) {
+    private func debugPrintNodeArray(_ children: [KeywordTreeNode], level: Int) {
         let indent = String(repeating: "  ", count: level)
-        for (key, node) in children.sorted(by: { $0.key.localizedStandardCompare($1.key) == .orderedAscending }) {
-            let imageCount = node.imageFilenames?.count ?? 0
-            print("\(indent)- '\(key)' (\(imageCount) images)")
-            if let imageFilenames = node.imageFilenames, !imageFilenames.isEmpty {
-                print("\(indent)  📸 Images: \(imageFilenames.joined(separator: ", "))")
+        for node in children.sorted(by: { $0.name.localizedStandardCompare($1.name) == .orderedAscending }) {
+            let imageCount = node.images.count
+            print("\(indent)- '\(node.name)' (\(imageCount) images)")
+            if !node.images.isEmpty {
+                print("\(indent)  📸 Images: \(node.images.joined(separator: ", "))")
             }
-            debugPrintNode(node.children, level: level + 1)
+            debugPrintNodeArray(node.children, level: level + 1)
         }
     }
 }
@@ -411,18 +421,20 @@ struct KeywordNodeView: View {
             // Children (if expanded)
             if isExpanded && !node.children.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(node.children.keys.sorted(by: { $0.localizedStandardCompare($1) == .orderedAscending }), id: \.self) { childKey in
+                    ForEach(node.children.indices, id: \.self) { index in
                         KeywordNodeView(
-                            keyword: childKey,
+                            keyword: node.children[index].name,
                             node: Binding(
-                                get: { node.children[childKey] ?? KeywordTreeNode() },
-                                set: { node.children[childKey] = $0 }
+                                get: { node.children[index] },
+                                set: { newNode in
+                                    node.children[index] = newNode
+                                }
                             ),
                             level: level + 1,
-                            onDelete: { deleteChild(childKey) },
-                            onRename: { oldName, newName in renameChild(from: oldName, to: newName) },
+                            onDelete: { deleteChild(index) },
+                            onRename: { oldName, newName in renameChild(at: index, to: newName) },
                             onNodeChanged: onNodeChanged,
-                            startEditingAutomatically: childKey.hasPrefix("New Keyword"),  // Auto-edit if it's a newly created keyword
+                            startEditingAutomatically: node.children[index].name.hasPrefix("New Keyword"),  // Auto-edit if it's a newly created keyword
                             markAsNewlyCreated: markAsNewlyCreated
                         )
                     }
@@ -464,12 +476,14 @@ struct KeywordNodeView: View {
         var finalName = newName
         var counter = 1
         
-        while node.children.keys.contains(finalName) {
+        // Check if name exists in array-based children
+        while node.children.contains(where: { $0.name == finalName }) {
             finalName = "\(newName) \(counter)"
             counter += 1
         }
         
-        node.children[finalName] = KeywordTreeNode()
+        // Add to array-based structure
+        node.children.append(KeywordTreeNode(name: finalName, images: [], children: []))
         isExpanded = true // Expand to show the new child
         
         // Mark the new keyword for auto-editing if at root level
@@ -480,19 +494,16 @@ struct KeywordNodeView: View {
         onNodeChanged()
     }
     
-    private func deleteChild(_ childKey: String) {
-        node.children.removeValue(forKey: childKey)
+    private func deleteChild(_ index: Int) {
+        // Remove from array-based structure
+        node.children.remove(at: index)
         onNodeChanged()
     }
     
-    private func renameChild(from oldName: String, to newName: String) {
-        guard oldName != newName else { return }
-        
-        if let childNode = node.children[oldName] {
-            node.children.removeValue(forKey: oldName)
-            node.children[newName] = childNode
-            onNodeChanged()
-        }
+    private func renameChild(at index: Int, to newName: String) {
+        // Update name directly
+        node.children[index].name = newName
+        onNodeChanged()
     }
 }
 

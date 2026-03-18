@@ -18,8 +18,11 @@ struct ImagesView: View {
     @State private var searchText = ""
     @State private var selectedKeywords: [String] = []
     @State private var availableKeywords: [String] = []
+    @State private var keywordTree: KeywordTree? = nil
     @State private var sidebarWidth: CGFloat = 200
     @State private var imageWidth: CGFloat = UserDefaults.standard.object(forKey: "ImageWidth") as? CGFloat ?? 250
+    @State private var isSelectionMode = false
+    @State private var selectedImages = Set<String>()
     
     private var filteredImages: [ImageMetadata] {
         var filtered = images
@@ -28,18 +31,17 @@ struct ImagesView: View {
         if !searchText.isEmpty {
             filtered = filtered.filter { image in
                 (image.title?.localizedCaseInsensitiveContains(searchText) ?? false) ||
-                image.filename.localizedCaseInsensitiveContains(searchText) ||
-                (image.keywords?.contains { $0.localizedCaseInsensitiveContains(searchText) } ?? false)
+                image.filename.localizedCaseInsensitiveContains(searchText)
             }
         }
         
-        // Filter by selected keywords
+        // Filter by selected keywords (including child keywords)
         if !selectedKeywords.isEmpty {
+            // Get all image filenames associated with selected keywords and their descendants
+            let associatedFilenames = getImageFilenamesForKeywords(selectedKeywords)
+            
             filtered = filtered.filter { image in
-                guard let imageKeywords = image.keywords else { return false }
-                return selectedKeywords.allSatisfy { keyword in
-                    imageKeywords.contains(keyword)
-                }
+                return associatedFilenames.contains(image.filename)
             }
         }
         
@@ -58,7 +60,7 @@ struct ImagesView: View {
         Group {
 #if os(macOS)
             ResizableSidebarView(
-                availableKeywords: availableKeywords,
+                keywordTree: keywordTree,
                 selectedKeywords: $selectedKeywords,
                 searchText: $searchText,
                 filteredImages: filteredImages,
@@ -66,10 +68,16 @@ struct ImagesView: View {
                 errorMessage: errorMessage,
                 imageWidth: $imageWidth,
                 sidebarWidth: $sidebarWidth,
+                isSelectionMode: $isSelectionMode,
+                selectedImages: $selectedImages,
                 loadImagesAction: { Task { await loadImages() } },
                 onImageWidthChanged: { width in
                     UserDefaults.standard.set(width, forKey: "ImageWidth")
-                }
+                },
+                onKeywordToggle: { keyword in
+                    toggleKeywordForSelectedImages(keyword)
+                },
+                onCollectCheckedKeywords: collectCheckedKeywords
             )
             .frame(minHeight: 300)
             .navigationTitle("Images")
@@ -123,10 +131,13 @@ struct ImagesView: View {
                         searchText: $searchText,
                         selectedKeywords: $selectedKeywords,
                         imageWidth: $imageWidth,
+                        isSelectionMode: $isSelectionMode,
+                        selectedImages: $selectedImages,
                         loadImagesAction: { Task { await loadImages() } },
                         onImageWidthChanged: { width in
                             UserDefaults.standard.set(width, forKey: "ImageWidth")
-                        }
+                        },
+                        onCollectCheckedKeywords: collectCheckedKeywords
                     )
                 }
                 .navigationTitle("Images")
@@ -202,10 +213,11 @@ struct ImagesView: View {
             // Load available keywords
             do {
                 print("📱 Images: Attempting to fetch keywords...")
-                let keywordTree = try await dropboxService.fetchKeywords()
-                print("📱 Images: Successfully fetched keywords tree with \(keywordTree.children.count) root nodes")
+                let fetchedKeywordTree = try await dropboxService.fetchKeywords()
+                print("📱 Images: Successfully fetched keywords tree with \(fetchedKeywordTree.children.count) root nodes")
                 await MainActor.run {
-                    availableKeywords = extractAllKeywords(from: keywordTree)
+                    keywordTree = fetchedKeywordTree
+                    availableKeywords = extractAllKeywords(from: fetchedKeywordTree)
                 }
                 print("📱 Images: Extracted \(availableKeywords.count) total keywords")
             } catch {
@@ -213,6 +225,7 @@ struct ImagesView: View {
                 print("⚠️ Images: Keywords error type: \(type(of: error))")
                 // Continue without keywords - this is normal for new setups
                 await MainActor.run {
+                    keywordTree = nil
                     availableKeywords = []
                 }
             }
@@ -247,10 +260,12 @@ struct ImagesView: View {
     private func extractAllKeywords(from keywordTree: KeywordTree) -> [String] {
         var keywords: [String] = []
         
-        func extractRecursive(_ children: [String: KeywordTreeNode]) {
-            for (key, node) in children {
-                keywords.append(key)
-                extractRecursive(node.children)
+        func extractRecursive(_ children: [KeywordTreeNode], currentPath: [String] = []) {
+            for node in children {
+                let fullPath = currentPath + [node.name]
+                let fullKeyword = fullPath.joined(separator: "/")
+                keywords.append(fullKeyword)
+                extractRecursive(node.children, currentPath: fullPath)
             }
         }
         
@@ -264,6 +279,150 @@ struct ImagesView: View {
         } else {
             selectedKeywords.append(keyword)
         }
+    }
+    
+    private func collectCheckedKeywords() -> [String] {
+        guard isSelectionMode && !selectedImages.isEmpty else { return selectedKeywords }
+        
+        // Get selected image filenames
+        let selectedMetadata = filteredImages.filter { selectedImages.contains($0.dropboxPath) }
+        let selectedFilenames = Set(selectedMetadata.map { $0.filename })
+        
+        return availableKeywords.filter { keyword in
+            // Get filenames associated with this keyword from the tree
+            let keywordFilenames = Set(getImageFilenamesForKeyword(keyword, in: keywordTree ?? KeywordTree()) ?? [])
+            
+            // Return true if any selected images have this keyword (should be preserved as filter)
+            return !selectedFilenames.intersection(keywordFilenames).isEmpty
+        }
+    }
+    
+    private func toggleKeywordForSelectedImages(_ keyword: String) {
+        print("🔀 ImagesView: toggleKeywordForSelectedImages called for '\(keyword)'")
+        print("🔀 ImagesView: isSelectionMode=\(isSelectionMode), selectedImages.count=\(selectedImages.count)")
+        
+        guard isSelectionMode && !selectedImages.isEmpty else { 
+            print("🔀 ImagesView: Exiting - not in selection mode or no images selected")
+            return 
+        }
+        
+        // Get the selected image metadata objects to get filenames
+        let selectedMetadata = filteredImages.filter { selectedImages.contains($0.dropboxPath) }
+        let selectedFilenames = selectedMetadata.map { $0.filename }
+        print("🔀 ImagesView: selectedFilenames: \(selectedFilenames)")
+        
+        // Check current status by looking at keyword tree associations
+        let currentlyAssociatedFilenames = (keywordTree ?? KeywordTree()).getImageFilenamesForKeyword(keyword) ?? []
+        let selectedFilenamesSet = Set(selectedFilenames)
+        let currentlyAssociatedSet = Set(currentlyAssociatedFilenames)
+        
+        let intersection = selectedFilenamesSet.intersection(currentlyAssociatedSet)
+        print("🔀 ImagesView: intersection.count=\(intersection.count), selectedFilenames.count=\(selectedFilenames.count)")
+        
+        // Decide the action based on how many selected images already have this keyword
+        let shouldAdd: Bool
+        if intersection.count == selectedFilenames.count {
+            shouldAdd = false  // All selected images have this keyword - remove it
+            print("🔀 ImagesView: Will REMOVE keyword (all images already have it)")
+        } else {
+            shouldAdd = true   // Some or no selected images have this keyword - add it to all
+            print("🔀 ImagesView: Will ADD keyword (some/no images have it)")
+        }
+        
+        // Apply the changes to selected images
+        Task {
+            print("🔀 ImagesView: Starting async task to apply changes")
+            do {
+                for filename in selectedFilenames {
+                    if shouldAdd {
+                        print("🔀 ImagesView: Adding '\(filename)' to keyword '\(keyword)'")
+                        try await dropboxService.addImageToKeyword(filename: filename, keywordPath: keyword.components(separatedBy: "/"))
+                    } else {
+                        print("🔀 ImagesView: Removing '\(filename)' from keyword '\(keyword)'")
+                        try await dropboxService.removeImageFromKeyword(filename: filename, keywordPath: keyword.components(separatedBy: "/"))
+                    }
+                }
+                // Reload images to reflect the changes
+                print("🔀 ImagesView: Reloading images to reflect changes")
+                await loadImages()
+                print("🔀 ImagesView: Image reload completed")
+            } catch {
+                print("❌ ImagesView: Error toggling keyword for selected images: \(error)")
+            }
+        }
+    }
+    
+    private func getDescendantKeywords(_ keyword: String) -> [String] {
+        guard let keywordTree = keywordTree else { return [] }
+        
+        var descendants: [String] = []
+        
+        func traverseNode(_ node: KeywordTreeNode, currentPath: [String]) {
+            for childNode in node.children {
+                let fullPath = currentPath + [childNode.name]
+                let fullKeyword = fullPath.joined(separator: "/")
+                descendants.append(fullKeyword)
+                traverseNode(childNode, currentPath: fullPath)
+            }
+        }
+        
+        // Parse the selected keyword to get its path components
+        let keywordPath = keyword.components(separatedBy: "/")
+        
+        // Navigate to the selected keyword's node
+        var currentNode: KeywordTreeNode? = nil
+        var currentChildren = keywordTree.children
+        
+        for pathComponent in keywordPath {
+            var foundNode: KeywordTreeNode? = nil
+            for node in currentChildren {
+                if node.name == pathComponent {
+                    foundNode = node
+                    currentChildren = node.children
+                    break
+                }
+            }
+            if let node = foundNode {
+                currentNode = node
+            } else {
+                return [] // Keyword not found in tree
+            }
+        }
+        
+        // If we found the node, traverse all its descendants
+        if let node = currentNode {
+            traverseNode(node, currentPath: keywordPath)
+        }
+        
+        return descendants
+    }
+    
+    private func getImageFilenamesForKeywords(_ selectedKeywords: [String]) -> Set<String> {
+        guard let keywordTree = keywordTree else { return [] }
+        
+        var allFilenames = Set<String>()
+        
+        for keyword in selectedKeywords {
+            // Get filenames for the selected keyword itself
+            if let filenames = getImageFilenamesForKeyword(keyword, in: keywordTree) {
+                allFilenames.formUnion(filenames)
+            }
+            
+            // Get filenames for all descendant keywords
+            let descendants = getDescendantKeywords(keyword)
+            for descendant in descendants {
+                if let filenames = getImageFilenamesForKeyword(descendant, in: keywordTree) {
+                    allFilenames.formUnion(filenames)
+                }
+            }
+        }
+        
+        return allFilenames
+    }
+    
+    private func getImageFilenamesForKeyword(_ keyword: String, in keywordTree: KeywordTree) -> [String]? {
+        // Use the KeywordTree's built-in method instead of reimplementing
+        return keywordTree.getImageFilenamesForKeyword(keyword)
     }
 }
 
@@ -305,6 +464,10 @@ struct KeywordChip: View {
 
 struct ImageTileView: View {
     let metadata: ImageMetadata
+    let isSelectionMode: Bool
+    let isSelected: Bool
+    let onSelectionToggle: () -> Void
+    
     @StateObject private var cacheManager = ImageCacheManager.shared
     @State private var image: PlatformImage?
     @State private var isLoading = false
@@ -343,21 +506,38 @@ struct ImageTileView: View {
                         }
                     }
                 }
-            }
-            
-            // Title and metadata
-            VStack(alignment: .leading, spacing: 4) {
-                Text(metadata.displayName)
-                    .font(.headline)
-                    .lineLimit(2)
                 
-                if let keywords = metadata.keywords, !keywords.isEmpty {
-                    Text(keywords.prefix(3).joined(separator: ", "))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
+                // Selection overlay
+                if isSelectionMode {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            ZStack {
+                                Circle()
+                                    .fill(Color.white.opacity(0.9))
+                                    .frame(width: 24, height: 24)
+                                
+                                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                    .foregroundColor(isSelected ? .blue : .gray)
+                                    .font(.title3)
+                            }
+                            .padding(8)
+                        }
+                        Spacer()
+                    }
                 }
             }
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 3)
+            )
+            .onTapGesture {
+                if isSelectionMode {
+                    onSelectionToggle()
+                }
+            }
+            
+            // No metadata display needed - selection checkboxes show keyword state
         }
         .task {
             await loadImage()
@@ -401,9 +581,39 @@ struct ImageTileView: View {
 // MARK: - Missing View Components
 
 struct KeywordsSidebarView: View {
-    let availableKeywords: [String]
+    let keywordTree: KeywordTree?
     @Binding var selectedKeywords: [String]
     @Binding var searchText: String
+    let isSelectionMode: Bool
+    let selectedImages: Set<String>
+    let filteredImages: [ImageMetadata]
+    let onKeywordToggle: (String) -> Void
+    
+    @State private var expandedNodes: Set<String> = []
+    
+    private func keywordStatusForSelectedImages(_ keyword: String) -> KeywordStatus {
+        guard isSelectionMode && !selectedImages.isEmpty else {
+            return selectedKeywords.contains(keyword) ? .selected : .unselected
+        }
+        
+        // Get selected image filenames
+        let selectedMetadata = filteredImages.filter { selectedImages.contains($0.dropboxPath) }
+        let selectedFilenames = Set(selectedMetadata.map { $0.filename })
+        
+        // Get filenames associated with this keyword from the tree
+        let keywordFilenames = Set((keywordTree ?? KeywordTree()).getImageFilenamesForKeyword(keyword) ?? [])
+        
+        // Find intersection
+        let intersection = selectedFilenames.intersection(keywordFilenames)
+        
+        if intersection.count == selectedFilenames.count {
+            return .allSelected
+        } else if intersection.count > 0 {
+            return .partiallySelected
+        } else {
+            return .noneSelected
+        }
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -422,33 +632,43 @@ struct KeywordsSidebarView: View {
                     Text("Keywords")
                         .font(.headline)
                     Spacer()
-                    if !selectedKeywords.isEmpty {
+                    if !selectedKeywords.isEmpty && !isSelectionMode {
                         Button("Clear") {
                             selectedKeywords.removeAll()
                         }
                         .font(.caption)
                     }
+                    if isSelectionMode && !selectedImages.isEmpty {
+                        Text("\(selectedImages.count) images")
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                    }
                 }
                 .padding(.horizontal)
                 
-                if availableKeywords.isEmpty {
-                    Text("No keywords available")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal)
-                } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 4) {
-                            ForEach(availableKeywords, id: \.self) { keyword in
-                                KeywordRowView(
-                                    keyword: keyword,
-                                    isSelected: selectedKeywords.contains(keyword)
-                                ) {
-                                    toggleKeyword(keyword)
-                                }
+                ScrollView {
+                    if let tree = keywordTree {
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(tree.children, id: \.name) { node in
+                                KeywordTreeNodeView(
+                                    keyword: node.name,
+                                    fullKeywordPath: node.name,
+                                    node: node,
+                                    level: 0,
+                                    selectedKeywords: $selectedKeywords,
+                                    expandedNodes: $expandedNodes,
+                                    isSelectionMode: isSelectionMode,
+                                    keywordStatusProvider: keywordStatusForSelectedImages,
+                                    onKeywordToggle: onKeywordToggle
+                                )
                             }
                         }
                         .padding(.horizontal)
+                    } else {
+                        Text("No keywords available")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal)
                     }
                 }
             }
@@ -458,12 +678,150 @@ struct KeywordsSidebarView: View {
         .padding(.vertical)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
+}
+
+enum KeywordStatus {
+    case selected // Normal mode: keyword is in filter
+    case unselected // Normal mode: keyword not in filter
+    case allSelected // Selection mode: all selected images have this keyword
+    case partiallySelected // Selection mode: some selected images have this keyword
+    case noneSelected // Selection mode: no selected images have this keyword
+}
+
+struct KeywordTreeNodeView: View {
+    let keyword: String  // Display name (just the node name)
+    let fullKeywordPath: String  // Full path from root (e.g., "animals/cats")
+    let node: KeywordTreeNode
+    let level: Int
+    @Binding var selectedKeywords: [String]
+    @Binding var expandedNodes: Set<String>
+    let isSelectionMode: Bool
+    let keywordStatusProvider: (String) -> KeywordStatus
+    let onKeywordToggle: (String) -> Void
     
-    private func toggleKeyword(_ keyword: String) {
-        if selectedKeywords.contains(keyword) {
-            selectedKeywords.removeAll { $0 == keyword }
+    private var isExpanded: Bool {
+        expandedNodes.contains(fullKeywordPath)
+    }
+    
+    private var keywordStatus: KeywordStatus {
+        keywordStatusProvider(fullKeywordPath)
+    }
+    
+    private var hasChildren: Bool {
+        !node.children.isEmpty
+    }
+    
+    private var checkboxIcon: String {
+        switch keywordStatus {
+        case .selected, .allSelected:
+            return "checkmark.square.fill"
+        case .partiallySelected:
+            return "minus.square.fill"
+        case .unselected, .noneSelected:
+            return "square"
+        }
+    }
+    
+    private var checkboxColor: Color {
+        switch keywordStatus {
+        case .selected, .allSelected:
+            return .blue
+        case .partiallySelected:
+            return .orange
+        case .unselected, .noneSelected:
+            return .secondary
+        }
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            // Current node
+            HStack(spacing: 4) {
+                // Indentation
+                ForEach(0..<level, id: \.self) { _ in
+                    Rectangle()
+                        .fill(Color.clear)
+                        .frame(width: 20, height: 1)
+                }
+                
+                // Expand/Collapse button
+                if hasChildren {
+                    Button(action: { toggleExpanded() }) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .frame(width: 20, alignment: .leading)
+                } else {
+                    Rectangle()
+                        .fill(Color.clear)
+                        .frame(width: 20, height: 1)
+                }
+                
+                // Keyword selection
+                Button(action: { toggleKeyword() }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: checkboxIcon)
+                            .foregroundColor(checkboxColor)
+                            .font(.caption)
+                        
+                        Text(keyword)
+                            .font(.body)
+                            .foregroundColor(.primary)
+                            .lineLimit(1)
+                        
+                        Spacer()
+                    }
+                }
+                .buttonStyle(PlainButtonStyle())
+                .contentShape(Rectangle())
+            }
+            .padding(.vertical, 2)
+            
+            // Children nodes (if expanded)
+            if isExpanded && hasChildren {
+                ForEach(node.children, id: \.name) { childNode in
+                    KeywordTreeNodeView(
+                        keyword: childNode.name,
+                        fullKeywordPath: fullKeywordPath + "/" + childNode.name,
+                        node: childNode,
+                        level: level + 1,
+                        selectedKeywords: $selectedKeywords,
+                        expandedNodes: $expandedNodes,
+                        isSelectionMode: isSelectionMode,
+                        keywordStatusProvider: keywordStatusProvider,
+                        onKeywordToggle: onKeywordToggle
+                    )
+                }
+            }
+        }
+    }
+    
+    private func toggleExpanded() {
+        if isExpanded {
+            expandedNodes.remove(fullKeywordPath)
         } else {
-            selectedKeywords.append(keyword)
+            expandedNodes.insert(fullKeywordPath)
+        }
+    }
+    
+    private func toggleKeyword() {
+        print("🔘 KeywordTreeNodeView: toggleKeyword called for '\(fullKeywordPath)', isSelectionMode: \(isSelectionMode)")
+        
+        if isSelectionMode {
+            // In selection mode, toggle keyword for selected images using full path
+            print("🔘 KeywordTreeNodeView: Calling onKeywordToggle for '\(fullKeywordPath)'")
+            onKeywordToggle(fullKeywordPath)
+        } else {
+            // In normal mode, toggle keyword filter using full path
+            if selectedKeywords.contains(fullKeywordPath) {
+                selectedKeywords.removeAll { $0 == fullKeywordPath }
+                print("🔘 KeywordTreeNodeView: Removed '\(fullKeywordPath)' from filter")
+            } else {
+                selectedKeywords.append(fullKeywordPath)
+                print("🔘 KeywordTreeNodeView: Added '\(fullKeywordPath)' to filter")
+            }
         }
     }
 }
@@ -499,8 +857,11 @@ struct ImagesMainView: View {
     @Binding var searchText: String
     @Binding var selectedKeywords: [String]
     @Binding var imageWidth: CGFloat
+    @Binding var isSelectionMode: Bool
+    @Binding var selectedImages: Set<String>
     let loadImagesAction: () -> Void
     let onImageWidthChanged: (CGFloat) -> Void
+    let onCollectCheckedKeywords: () -> [String]
     
     private var gridColumns: [GridItem] {
 #if os(macOS)
@@ -512,6 +873,37 @@ struct ImagesMainView: View {
     
     var body: some View {
         VStack(spacing: 0) {
+            // Local toolbar for images subpane
+            HStack {
+                Button(action: {
+                    if isSelectionMode {
+                        // Before exiting selection mode, preserve checked keywords as filters
+                        selectedKeywords = onCollectCheckedKeywords()
+                    }
+                    isSelectionMode.toggle()
+                    if !isSelectionMode {
+                        selectedImages.removeAll()
+                    }
+                }) {
+                    Text(isSelectionMode ? "Cancel" : "Select")
+                        .foregroundColor(isSelectionMode ? .red : .blue)
+                        .font(.body)
+                }
+                
+                Spacer()
+                
+                if isSelectionMode && !selectedImages.isEmpty {
+                    Text("\(selectedImages.count) selected")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(Color.gray.opacity(0.1))
+            
+            Divider()
+            
             // Main content area
             Group {
                 if isLoading {
@@ -574,7 +966,18 @@ struct ImagesMainView: View {
                     ScrollView {
                         LazyVGrid(columns: gridColumns, spacing: 16) {
                             ForEach(filteredImages) { metadata in
-                                ImageTileView(metadata: metadata)
+                                ImageTileView(
+                                    metadata: metadata,
+                                    isSelectionMode: isSelectionMode,
+                                    isSelected: selectedImages.contains(metadata.dropboxPath),
+                                    onSelectionToggle: {
+                                        if selectedImages.contains(metadata.dropboxPath) {
+                                            selectedImages.remove(metadata.dropboxPath)
+                                        } else {
+                                            selectedImages.insert(metadata.dropboxPath)
+                                        }
+                                    }
+                                )
                             }
                         }
                         .padding()
@@ -616,7 +1019,7 @@ struct ImagesMainView: View {
 // MARK: - Resizable Sidebar Layout
 
 struct ResizableSidebarView: View {
-    let availableKeywords: [String]
+    let keywordTree: KeywordTree?
     @Binding var selectedKeywords: [String]
     @Binding var searchText: String
     let filteredImages: [ImageMetadata]
@@ -624,18 +1027,19 @@ struct ResizableSidebarView: View {
     let errorMessage: String?
     @Binding var imageWidth: CGFloat
     @Binding var sidebarWidth: CGFloat
+    @Binding var isSelectionMode: Bool
+    @Binding var selectedImages: Set<String>
     let loadImagesAction: () -> Void
     let onImageWidthChanged: (CGFloat) -> Void
+    let onKeywordToggle: (String) -> Void
+    let onCollectCheckedKeywords: () -> [String]
     
     var body: some View {
         GeometryReader { geometry in
             HStack(spacing: 0) {
                 // Keywords Sidebar
-                KeywordsSidebarView(
-                    availableKeywords: availableKeywords,
-                    selectedKeywords: $selectedKeywords,
-                    searchText: $searchText
-                )
+                KeywordsSidebarView( keywordTree: keywordTree, selectedKeywords: $selectedKeywords, searchText: $searchText, isSelectionMode: isSelectionMode, selectedImages: selectedImages,
+                                     filteredImages: filteredImages, onKeywordToggle: onKeywordToggle )
                 .frame(width: sidebarWidth)
                 .frame(maxHeight: .infinity)
                 
@@ -653,8 +1057,11 @@ struct ResizableSidebarView: View {
                     searchText: $searchText,
                     selectedKeywords: $selectedKeywords,
                     imageWidth: $imageWidth,
+                    isSelectionMode: $isSelectionMode,
+                    selectedImages: $selectedImages,
                     loadImagesAction: loadImagesAction,
-                    onImageWidthChanged: onImageWidthChanged
+                    onImageWidthChanged: onImageWidthChanged,
+                    onCollectCheckedKeywords: onCollectCheckedKeywords
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

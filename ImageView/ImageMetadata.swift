@@ -34,10 +34,14 @@ struct ImageMetadata: Codable, Identifiable {
 }
 
 struct KeywordTree: Codable {
-    var children: [String: KeywordTreeNode]
+    var name: String
+    var images: [String]
+    var children: [KeywordTreeNode]
     
     init() {
-        children = [:]
+        name = "keywords"
+        images = []
+        children = []
     }
     
     // MARK: - Image Filename Management
@@ -45,135 +49,147 @@ struct KeywordTree: Codable {
     mutating func addImageToKeyword(_ filename: String, keywordPath: [String]) {
         guard !keywordPath.isEmpty else { return }
         
-        // Build the full path by navigating and creating nodes as needed
-        var currentChildren = children
-        var pathNodes: [(String, KeywordTreeNode?)] = []
-        
-        // First pass: collect all nodes along the path
-        for keyword in keywordPath {
-            let node = currentChildren[keyword]
-            pathNodes.append((keyword, node))
-            currentChildren = node?.children ?? [:]
-        }
-        
-        // Second pass: rebuild the tree from the bottom up
-        var newChildren: [String: KeywordTreeNode] = [:]
-        
-        // Start from the deepest level and work backwards
-        for i in (0..<pathNodes.count).reversed() {
-            let (keyword, existingNode) = pathNodes[i]
+        // Navigate to the target node and add the image
+        if keywordPath.count == 1 {
+            // Root level keyword
+            let keywordName = keywordPath[0]
             
-            if i == pathNodes.count - 1 {
-                // This is the target node - add the image filename
-                var imageFilenames = existingNode?.imageFilenames ?? []
-                if !imageFilenames.contains(filename) {
-                    imageFilenames.append(filename)
+            // Find existing root keyword or create new one
+            if let existingIndex = children.firstIndex(where: { $0.name == keywordName }) {
+                if !children[existingIndex].images.contains(filename) {
+                    children[existingIndex].images.append(filename)
                 }
-                newChildren = [keyword: KeywordTreeNode(imageFilenames: imageFilenames, children: existingNode?.children ?? [:])]
             } else {
-                // This is an intermediate node - preserve existing data and add the child
-                let childKeyword = pathNodes[i + 1].0
-                var nodeChildren = existingNode?.children ?? [:]
-                nodeChildren[childKeyword] = newChildren[childKeyword]!
-                newChildren = [keyword: KeywordTreeNode(imageFilenames: existingNode?.imageFilenames, children: nodeChildren)]
+                // Create new root keyword
+                children.append(KeywordTreeNode(name: keywordName, images: [filename], children: []))
             }
+        } else {
+            // Multi-level keyword path - more complex navigation needed
+            var localChildren = children
+            addImageToKeywordRecursive(filename, keywordPath: keywordPath, children: &localChildren)
+            children = localChildren
         }
+    }
+    
+    private mutating func addImageToKeywordRecursive(_ filename: String, keywordPath: [String], children: inout [KeywordTreeNode]) {
+        guard !keywordPath.isEmpty else { return }
         
-        // Finally, update the root children
-        if let (rootKeyword, updatedNode) = newChildren.first {
-            children[rootKeyword] = updatedNode
+        let currentKeyword = keywordPath[0]
+        let remainingPath = Array(keywordPath.dropFirst())
+        
+        if let existingIndex = children.firstIndex(where: { $0.name == currentKeyword }) {
+            if remainingPath.isEmpty {
+                // This is the target - add image
+                if !children[existingIndex].images.contains(filename) {
+                    children[existingIndex].images.append(filename)
+                }
+            } else {
+                // Continue recursively
+                var childChildren = children[existingIndex].children
+                addImageToKeywordRecursive(filename, keywordPath: remainingPath, children: &childChildren)
+                children[existingIndex].children = childChildren
+            }
+        } else {
+            // Create new keyword
+            if remainingPath.isEmpty {
+                children.append(KeywordTreeNode(name: currentKeyword, images: [filename], children: []))
+            } else {
+                var newNode = KeywordTreeNode(name: currentKeyword, images: [], children: [])
+                addImageToKeywordRecursive(filename, keywordPath: remainingPath, children: &newNode.children)
+                children.append(newNode)
+            }
         }
     }
     
     mutating func removeImageFromKeyword(_ filename: String, keywordPath: [String]) {
         guard !keywordPath.isEmpty else { return }
+        var localChildren = children
+        removeImageFromKeywordRecursive(filename, keywordPath: keywordPath, children: &localChildren)
+        children = localChildren
+    }
+    
+    private mutating func removeImageFromKeywordRecursive(_ filename: String, keywordPath: [String], children: inout [KeywordTreeNode]) {
+        guard !keywordPath.isEmpty else { return }
         
-        // Build the full path by navigating existing nodes
-        var currentChildren = children
-        var pathNodes: [(String, KeywordTreeNode?)] = []
+        let currentKeyword = keywordPath[0]
+        let remainingPath = Array(keywordPath.dropFirst())
         
-        // First pass: collect all nodes along the path
-        for keyword in keywordPath {
-            let node = currentChildren[keyword]
-            pathNodes.append((keyword, node))
-            if let node = node {
-                currentChildren = node.children
+        if let existingIndex = children.firstIndex(where: { $0.name == currentKeyword }) {
+            if remainingPath.isEmpty {
+                // This is the target - remove image
+                children[existingIndex].images.removeAll { $0 == filename }
             } else {
-                // Node doesn't exist, nothing to remove
-                return
+                // Continue recursively
+                var childChildren = children[existingIndex].children
+                removeImageFromKeywordRecursive(filename, keywordPath: remainingPath, children: &childChildren)
+                children[existingIndex].children = childChildren
             }
-        }
-        
-        // Second pass: rebuild the tree from the bottom up
-        var newChildren: [String: KeywordTreeNode] = [:]
-        
-        // Start from the deepest level and work backwards
-        for i in (0..<pathNodes.count).reversed() {
-            let (keyword, existingNode) = pathNodes[i]
-            guard let existingNode = existingNode else { continue }
-            
-            if i == pathNodes.count - 1 {
-                // This is the target node - remove the image filename
-                var imageFilenames = existingNode.imageFilenames ?? []
-                imageFilenames.removeAll { $0 == filename }
-                let updatedFilenames = imageFilenames.isEmpty ? nil : imageFilenames
-                newChildren = [keyword: KeywordTreeNode(imageFilenames: updatedFilenames, children: existingNode.children)]
-            } else {
-                // This is an intermediate node - preserve existing data and add the child
-                let childKeyword = pathNodes[i + 1].0
-                var nodeChildren = existingNode.children
-                if let updatedChild = newChildren[childKeyword] {
-                    nodeChildren[childKeyword] = updatedChild
-                }
-                newChildren = [keyword: KeywordTreeNode(imageFilenames: existingNode.imageFilenames, children: nodeChildren)]
-            }
-        }
-        
-        // Finally, update the root children
-        if let (rootKeyword, updatedNode) = newChildren.first {
-            children[rootKeyword] = updatedNode
         }
     }
     
     mutating func removeImageFromAllKeywords(_ filename: String) {
-        children = removeImageFromAllNodes(filename, nodes: children)
+        var localChildren = children
+        removeImageFromAllNodesRecursive(filename, children: &localChildren)
+        children = localChildren
     }
     
-    private func removeImageFromAllNodes(_ filename: String, nodes: [String: KeywordTreeNode]) -> [String: KeywordTreeNode] {
-        var updatedNodes: [String: KeywordTreeNode] = [:]
-        
-        for (key, node) in nodes {
+    private mutating func removeImageFromAllNodesRecursive(_ filename: String, children: inout [KeywordTreeNode]) {
+        for i in children.indices {
             // Remove filename from current node
-            var imageFilenames = node.imageFilenames ?? []
-            imageFilenames.removeAll { $0 == filename }
-            let updatedFilenames = imageFilenames.isEmpty ? nil : imageFilenames
+            children[i].images.removeAll { $0 == filename }
             
             // Recursively process children
-            let updatedChildren = removeImageFromAllNodes(filename, nodes: node.children)
-            
-            updatedNodes[key] = KeywordTreeNode(imageFilenames: updatedFilenames, children: updatedChildren)
+            var childChildren = children[i].children
+            removeImageFromAllNodesRecursive(filename, children: &childChildren)
+            children[i].children = childChildren
+        }
+    }
+    
+    // MARK: - Query Methods
+    
+    func getImageFilenamesForKeyword(_ keyword: String) -> [String]? {
+        let keywordPath = keyword.components(separatedBy: "/")
+        return findKeywordImages(keywordPath, in: children)
+    }
+    
+    private func findKeywordImages(_ keywordPath: [String], in children: [KeywordTreeNode]) -> [String]? {
+        guard !keywordPath.isEmpty else { return nil }
+        
+        let currentKeyword = keywordPath[0]
+        let remainingPath = Array(keywordPath.dropFirst())
+        
+        for node in children {
+            if node.name == currentKeyword {
+                if remainingPath.isEmpty {
+                    return node.images
+                } else {
+                    return findKeywordImages(remainingPath, in: node.children)
+                }
+            }
         }
         
-        return updatedNodes
+        return nil
     }
 }
 
 struct KeywordTreeNode: Codable {
-    var children: [String: KeywordTreeNode]
-    let imageFilenames: [String]?
+    var name: String
+    var images: [String]
+    var children: [KeywordTreeNode]
     
-    init(imageFilenames: [String]? = nil, children: [String: KeywordTreeNode] = [:]) {
+    init(name: String = "", images: [String] = [], children: [KeywordTreeNode] = []) {
+        self.name = name
+        self.images = images
         self.children = children
-        self.imageFilenames = imageFilenames
     }
     
     // MARK: - Helper Properties
     
     var hasImages: Bool {
-        return !(imageFilenames?.isEmpty ?? true)
+        return !images.isEmpty
     }
     
     var imageCount: Int {
-        return imageFilenames?.count ?? 0
+        return images.count
     }
 }

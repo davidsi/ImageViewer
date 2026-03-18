@@ -352,9 +352,15 @@ class DropboxService: ObservableObject {
             return try await withCheckedThrowingContinuation { continuation in
                 client.files.download(path: keywordsPath).response { result, error in
                     if let result = result {
+                        // First, let's examine the raw JSON structure
+                        if let jsonString = String(data: result.1, encoding: .utf8) {
+                            print("📂 Dropbox: Raw JSON content:")
+                            print(jsonString)
+                        }
+                        
                         do {
                             let keywords = try JSONDecoder().decode(KeywordTree.self, from: result.1)
-                            print("📂 Dropbox: Successfully loaded keywords")
+                            print("📂 Dropbox: Successfully loaded keywords with current format")
                             continuation.resume(returning: keywords)
                         } catch {
                             print("📂 Dropbox: Error parsing keywords JSON: \(error)")
@@ -366,7 +372,7 @@ class DropboxService: ObservableObject {
                         
                         // Create default keywords tree with root "keywords" node
                         var defaultTree = KeywordTree()
-                        defaultTree.children["keywords"] = KeywordTreeNode()
+                        // The defaultTree already has the correct structure with keywords.children as empty array
                         
                         continuation.resume(returning: defaultTree)
                         
@@ -556,18 +562,9 @@ class DropboxService: ObservableObject {
     func getImagesForKeyword(keywordPath: [String]) async throws -> [String] {
         let keywordTree = try await fetchKeywords()
         
-        // Navigate to the target keyword
-        var currentChildren = keywordTree.children
-        for keyword in keywordPath {
-            guard let node = currentChildren[keyword] else {
-                return [] // Keyword path doesn't exist
-            }
-            if keyword == keywordPath.last {
-                return node.imageFilenames ?? []
-            }
-            currentChildren = node.children
-        }
-        return []
+        // Use the existing method in KeywordTree to find images
+        let fullKeywordPath = keywordPath.joined(separator: "/")
+        return keywordTree.getImageFilenamesForKeyword(fullKeywordPath) ?? []
     }
 }
 
