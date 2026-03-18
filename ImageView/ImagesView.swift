@@ -6,6 +6,9 @@
 //
 
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct ImagesView: View {
     @Environment(\.modelContext) private var modelContext
@@ -89,63 +92,98 @@ struct ImagesView: View {
                 }
             }
 #else
-            NavigationView {
-                VStack(spacing: 0) {
-                    // Search and Filter Controls
-                    VStack(spacing: 12) {
-                        // Search bar
-                        HStack {
-                            Image(systemName: "magnifyingglass")
-                                .foregroundColor(.secondary)
-                            TextField("Search images...", text: $searchText)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                        }
-                        .padding(.horizontal)
-                        
-                        // Keyword filter chips
-                        if !availableKeywords.isEmpty {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                LazyHStack(spacing: 8) {
-                                    ForEach(availableKeywords, id: \.self) { keyword in
-                                        KeywordChip(
-                                            keyword: keyword,
-                                            isSelected: selectedKeywords.contains(keyword)
-                                        ) {
-                                            toggleKeyword(keyword)
-                                        }
-                                    }
-                                }
-                                .padding(.horizontal)
-                            }
-                        }
-                    }
-                    .padding(.vertical, 8)
-                    
-                    Divider()
-                    
-                    // Main Content
-                    ImagesMainView(
-                        filteredImages: filteredImages,
-                        isLoading: isLoading,
-                        errorMessage: errorMessage,
-                        searchText: $searchText,
-                        selectedKeywords: $selectedKeywords,
-                        imageWidth: $imageWidth,
-                        isSelectionMode: $isSelectionMode,
-                        selectedImages: $selectedImages,
-                        loadImagesAction: { Task { await loadImages() } },
-                        onImageWidthChanged: { width in
-                            UserDefaults.standard.set(width, forKey: "ImageWidth")
-                        },
-                        onCollectCheckedKeywords: collectCheckedKeywords
-                    )
-                }
+            // Use horizontal layout for iPad, vertical for iPhone
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                ResizableSidebarView(
+                    keywordTree: dropboxService.cachedKeywordTree,
+                    selectedKeywords: $selectedKeywords,
+                    searchText: $searchText,
+                    filteredImages: filteredImages,
+                    isLoading: isLoading,
+                    errorMessage: errorMessage,
+                    imageWidth: $imageWidth,
+                    sidebarWidth: $sidebarWidth,
+                    isSelectionMode: $isSelectionMode,
+                    selectedImages: $selectedImages,
+                    loadImagesAction: { Task { await loadImages() } },
+                    onImageWidthChanged: { width in
+                        UserDefaults.standard.set(width, forKey: "ImageWidth")
+                    },
+                    onKeywordToggle: { keyword in
+                        toggleKeywordForSelectedImages(keyword)
+                    },
+                    onCollectCheckedKeywords: collectCheckedKeywords
+                )
+                .frame(minHeight: 300)
                 .navigationTitle("Images")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         RefreshButton(isLoading: isLoading) {
                             Task { await loadImages() }
+                        }
+                    }
+                }
+            } else {
+                // iPhone vertical layout
+                NavigationView {
+                    VStack(spacing: 0) {
+                        // Search and Filter Controls
+                        VStack(spacing: 12) {
+                            // Search bar
+                            HStack {
+                                Image(systemName: "magnifyingglass")
+                                    .foregroundColor(.secondary)
+                                TextField("Search images...", text: $searchText)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                            }
+                            .padding(.horizontal)
+                            
+                            // Keyword filter chips
+                            if !availableKeywords.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    LazyHStack(spacing: 8) {
+                                        ForEach(availableKeywords, id: \.self) { keyword in
+                                            KeywordChip(
+                                                keyword: keyword,
+                                                isSelected: selectedKeywords.contains(keyword)
+                                            ) {
+                                                toggleKeyword(keyword)
+                                            }
+                                        }
+                                    }
+                                    .padding(.horizontal)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 8)
+                        
+                        Divider()
+                        
+                        // Main Content
+                        ImagesMainView(
+                            filteredImages: filteredImages,
+                            isLoading: isLoading,
+                            errorMessage: errorMessage,
+                            searchText: $searchText,
+                            selectedKeywords: $selectedKeywords,
+                            imageWidth: $imageWidth,
+                            isSelectionMode: $isSelectionMode,
+                            selectedImages: $selectedImages,
+                            loadImagesAction: { Task { await loadImages() } },
+                            onImageWidthChanged: { width in
+                                UserDefaults.standard.set(width, forKey: "ImageWidth")
+                            },
+                            onCollectCheckedKeywords: collectCheckedKeywords
+                        )
+                    }
+                    .navigationTitle("Images")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            RefreshButton(isLoading: isLoading) {
+                                Task { await loadImages() }
+                            }
                         }
                     }
                 }
