@@ -60,7 +60,7 @@ struct ImagesView: View {
         Group {
 #if os(macOS)
             ResizableSidebarView(
-                keywordTree: keywordTree,
+                keywordTree: dropboxService.cachedKeywordTree,
                 selectedKeywords: $selectedKeywords,
                 searchText: $searchText,
                 filteredImages: filteredImages,
@@ -216,7 +216,6 @@ struct ImagesView: View {
                 let fetchedKeywordTree = try await dropboxService.fetchKeywords()
                 print("📱 Images: Successfully fetched keywords tree with \(fetchedKeywordTree.children.count) root nodes")
                 await MainActor.run {
-                    keywordTree = fetchedKeywordTree
                     availableKeywords = extractAllKeywords(from: fetchedKeywordTree)
                 }
                 print("📱 Images: Extracted \(availableKeywords.count) total keywords")
@@ -225,7 +224,6 @@ struct ImagesView: View {
                 print("⚠️ Images: Keywords error type: \(type(of: error))")
                 // Continue without keywords - this is normal for new setups
                 await MainActor.run {
-                    keywordTree = nil
                     availableKeywords = []
                 }
             }
@@ -290,7 +288,7 @@ struct ImagesView: View {
         
         return availableKeywords.filter { keyword in
             // Get filenames associated with this keyword from the tree
-            let keywordFilenames = Set(getImageFilenamesForKeyword(keyword, in: keywordTree ?? KeywordTree()) ?? [])
+            let keywordFilenames = Set(getImageFilenamesForKeyword(keyword, in: dropboxService.cachedKeywordTree ?? KeywordTree()) ?? [])
             
             // Return true if any selected images have this keyword (should be preserved as filter)
             return !selectedFilenames.intersection(keywordFilenames).isEmpty
@@ -312,7 +310,7 @@ struct ImagesView: View {
         print("🔀 ImagesView: selectedFilenames: \(selectedFilenames)")
         
         // Check current status by looking at keyword tree associations
-        let currentlyAssociatedFilenames = (keywordTree ?? KeywordTree()).getImageFilenamesForKeyword(keyword) ?? []
+        let currentlyAssociatedFilenames = (dropboxService.cachedKeywordTree ?? KeywordTree()).getImageFilenamesForKeyword(keyword) ?? []
         let selectedFilenamesSet = Set(selectedFilenames)
         let currentlyAssociatedSet = Set(currentlyAssociatedFilenames)
         
@@ -342,10 +340,8 @@ struct ImagesView: View {
                         try await dropboxService.removeImageFromKeyword(filename: filename, keywordPath: keyword.components(separatedBy: "/"))
                     }
                 }
-                // Reload images to reflect the changes
-                print("🔀 ImagesView: Reloading images to reflect changes")
-                await loadImages()
-                print("🔀 ImagesView: Image reload completed")
+                // Keyword tree is automatically updated via cache in DropboxService methods
+                print("🔀 ImagesView: Keyword update completed")
             } catch {
                 print("❌ ImagesView: Error toggling keyword for selected images: \(error)")
             }
@@ -353,7 +349,7 @@ struct ImagesView: View {
     }
     
     private func getDescendantKeywords(_ keyword: String) -> [String] {
-        guard let keywordTree = keywordTree else { return [] }
+        guard let keywordTree = dropboxService.cachedKeywordTree else { return [] }
         
         var descendants: [String] = []
         
@@ -398,26 +394,38 @@ struct ImagesView: View {
     }
     
     private func getImageFilenamesForKeywords(_ selectedKeywords: [String]) -> Set<String> {
-        guard let keywordTree = keywordTree else { return [] }
+        guard let keywordTree = dropboxService.cachedKeywordTree else { return [] }
+        guard !selectedKeywords.isEmpty else { return [] }
         
-        var allFilenames = Set<String>()
+        // Start with filenames from the first keyword (including descendants)
+        var resultFilenames: Set<String>? = nil
         
         for keyword in selectedKeywords {
+            var keywordFilenames = Set<String>()
+            
             // Get filenames for the selected keyword itself
             if let filenames = getImageFilenamesForKeyword(keyword, in: keywordTree) {
-                allFilenames.formUnion(filenames)
+                keywordFilenames.formUnion(filenames)
             }
             
             // Get filenames for all descendant keywords
             let descendants = getDescendantKeywords(keyword)
             for descendant in descendants {
                 if let filenames = getImageFilenamesForKeyword(descendant, in: keywordTree) {
-                    allFilenames.formUnion(filenames)
+                    keywordFilenames.formUnion(filenames)
                 }
+            }
+            
+            // For the first keyword, initialize the result set
+            if resultFilenames == nil {
+                resultFilenames = keywordFilenames
+            } else {
+                // For subsequent keywords, intersect with existing results (AND logic)
+                resultFilenames = resultFilenames!.intersection(keywordFilenames)
             }
         }
         
-        return allFilenames
+        return resultFilenames ?? []
     }
     
     private func getImageFilenamesForKeyword(_ keyword: String, in keywordTree: KeywordTree) -> [String]? {
@@ -877,17 +885,46 @@ struct ImagesMainView: View {
             HStack {
                 Button(action: {
                     if isSelectionMode {
-                        // Before exiting selection mode, preserve checked keywords as filters
-                        selectedKeywords = onCollectCheckedKeywords()
-                    }
-                    isSelectionMode.toggle()
-                    if !isSelectionMode {
+                        // Simply exit selection mode without preserving keywords
+                        isSelectionMode = false
                         selectedImages.removeAll()
+                    } else {
+                        // Enter selection mode
+                        isSelectionMode = true
                     }
                 }) {
                     Text(isSelectionMode ? "Cancel" : "Select")
                         .foregroundColor(isSelectionMode ? .red : .blue)
                         .font(.body)
+                }
+                
+                // Save button next to Cancel/Select button (left-aligned)
+                if isSelectionMode && !selectedImages.isEmpty {
+                    Button(action: {
+                        Task {
+                            do {
+                                // Get current cached keyword tree and save it to Dropbox
+                                if let keywordTree = DropboxService.shared.cachedKeywordTree {
+                                    try await DropboxService.shared.saveKeywords(keywordTree)
+                                    print("💾 Successfully saved keyword associations to Dropbox")
+                                } else {
+                                    print("⚠️ No cached keyword tree to save")
+                                }
+                            } catch {
+                                print("❌ Failed to save keyword associations: \(error)")
+                            }
+                            
+                            // Exit selection mode after save attempt (success or failure)
+                            await MainActor.run {
+                                isSelectionMode = false
+                                selectedImages.removeAll()
+                            }
+                        }
+                    }) {
+                        Text("Save")
+                            .foregroundColor(.green)
+                            .font(.body)
+                    }
                 }
                 
                 Spacer()

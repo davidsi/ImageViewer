@@ -19,6 +19,10 @@ class DropboxService: ObservableObject {
     private let keywordsFileName = "keywords.json"
     private let userSettings = UserSettings.shared
     
+    // Cached keyword tree to avoid repeated Dropbox calls
+    @Published var cachedKeywordTree: KeywordTree?
+    private var keywordTreeLoadTask: Task<KeywordTree, Error>?
+    
     private init() {}
     
     /// Constructs a proper Dropbox path by joining components
@@ -341,7 +345,13 @@ class DropboxService: ObservableObject {
     // MARK: - Keywords
     
     func fetchKeywords() async throws -> KeywordTree {
-        return try await executeWithTokenRefresh {
+        // Check cache first
+        if let cached = cachedKeywordTree {
+            print("📂 Dropbox: Using cached keyword tree")
+            return cached
+        }
+        
+        let keywordTree = try await executeWithTokenRefresh {
             guard let client = DropboxClientsManager.authorizedClient else {
                 throw DropboxError.notAuthenticated
             }
@@ -391,6 +401,14 @@ class DropboxService: ObservableObject {
                 }
             }
         }
+        
+        // Cache the fetched result
+        await MainActor.run {
+            cachedKeywordTree = keywordTree
+        }
+        print("📂 Dropbox: Cached keyword tree")
+        
+        return keywordTree
     }
     
     // MARK: - Keywords Save
@@ -528,43 +546,85 @@ class DropboxService: ObservableObject {
     // MARK: - Keyword-Image Association Management
     
     func addImageToKeyword(filename: String, keywordPath: [String]) async throws {
-        // Load current keywords
+        // Use cached tree or fetch if not available
         var keywordTree: KeywordTree
-        do {
+        if let cached = cachedKeywordTree {
+            keywordTree = cached
+        } else {
             keywordTree = try await fetchKeywords()
-        } catch {
-            // If no keywords file exists, create a new tree
-            keywordTree = KeywordTree()
         }
         
         // Add the image to the specified keyword path
         keywordTree.addImageToKeyword(filename, keywordPath: keywordPath)
         
-        // Save back to Dropbox
+        // Update cache immediately for responsive UI
+        await MainActor.run {
+            cachedKeywordTree = keywordTree
+        }
+        
+        // Save to Dropbox in background
         try await saveKeywords(keywordTree)
         print("📂 Dropbox: Added '\(filename)' to keyword path: \(keywordPath.joined(separator: " > "))")
     }
     
     func removeImageFromKeyword(filename: String, keywordPath: [String]) async throws {
-        var keywordTree = try await fetchKeywords()
+        var keywordTree: KeywordTree
+        if let cached = cachedKeywordTree {
+            keywordTree = cached
+        } else {
+            guard let fetched = try? await fetchKeywords() else { return }
+            keywordTree = fetched
+        }
+        
         keywordTree.removeImageFromKeyword(filename, keywordPath: keywordPath)
+        
+        // Update cache immediately
+        await MainActor.run {
+            cachedKeywordTree = keywordTree
+        }
+        
         try await saveKeywords(keywordTree)
         print("📂 Dropbox: Removed '\(filename)' from keyword path: \(keywordPath.joined(separator: " > "))")
     }
     
     func removeImageFromAllKeywords(filename: String) async throws {
-        var keywordTree = try await fetchKeywords()
+        var keywordTree: KeywordTree
+        if let cached = cachedKeywordTree {
+            keywordTree = cached
+        } else {
+            guard let fetched = try? await fetchKeywords() else { return }
+            keywordTree = fetched
+        }
+        
         keywordTree.removeImageFromAllKeywords(filename)
+        
+        // Update cache immediately  
+        await MainActor.run {
+            cachedKeywordTree = keywordTree
+        }
+        
         try await saveKeywords(keywordTree)
         print("📂 Dropbox: Removed '\(filename)' from all keywords")
     }
     
     func getImagesForKeyword(keywordPath: [String]) async throws -> [String] {
-        let keywordTree = try await fetchKeywords()
+        let keywordTree: KeywordTree
+        if let cached = cachedKeywordTree {
+            keywordTree = cached
+        } else {
+            keywordTree = try await fetchKeywords()
+        }
         
         // Use the existing method in KeywordTree to find images
         let fullKeywordPath = keywordPath.joined(separator: "/")
         return keywordTree.getImageFilenamesForKeyword(fullKeywordPath) ?? []
+    }
+    
+    func invalidateKeywordCache() {
+        cachedKeywordTree = nil
+        keywordTreeLoadTask?.cancel()
+        keywordTreeLoadTask = nil
+        print("📂 Dropbox: Keyword tree cache invalidated")
     }
 }
 

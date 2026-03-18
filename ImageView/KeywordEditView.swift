@@ -107,6 +107,23 @@ struct KeywordEditView: View {
                                         markAsNewlyCreated: markKeywordAsNewlyCreated
                                     )
                                 }
+                                
+                                // Add new keyword button
+                                Divider()
+                                    .padding(.vertical, 8)
+                                
+                                Button(action: addRootKeyword) {
+                                    HStack {
+                                        Image(systemName: "plus.circle.fill")
+                                            .foregroundColor(.blue)
+                                        Text("Add Keyword")
+                                            .foregroundColor(.blue)
+                                        Spacer()
+                                    }
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                                .padding(.horizontal)
+                                .padding(.bottom)
                             }
                             .padding(.horizontal)
                             .padding(.bottom)
@@ -119,23 +136,35 @@ struct KeywordEditView: View {
         .toolbar {
 #if os(iOS)
             ToolbarItem(placement: .navigationBarTrailing) {
-                KeywordToolbarContent(
-                    isSaving: isSaving,
-                    lastSaveTime: lastSaveTime,
-                    isLoading: isLoading,
-                    timeAgoString: timeAgoString,
-                    refreshAction: { Task { await loadKeywords() } }
-                )
+                HStack {
+                    Button("Save") {
+                        Task {
+                            await saveKeywords()
+                        }
+                    }
+                    .disabled(isLoading || isSaving)
+                    
+                    Button("Refresh") {
+                        Task { await loadKeywords() }
+                    }
+                    .disabled(isLoading || isSaving)
+                }
             }
 #else 
             ToolbarItem(placement: .primaryAction) {
-                KeywordToolbarContent(
-                    isSaving: isSaving,
-                    lastSaveTime: lastSaveTime,
-                    isLoading: isLoading,
-                    timeAgoString: timeAgoString,
-                    refreshAction: { Task { await loadKeywords() } }
-                )
+                HStack {
+                    Button("Save") {
+                        Task {
+                            await saveKeywords()
+                        }
+                    }
+                    .disabled(isLoading || isSaving)
+                    
+                    Button("Refresh") {
+                        Task { await loadKeywords() }
+                    }
+                    .disabled(isLoading || isSaving)
+                }
             }
 #endif
         }
@@ -143,7 +172,7 @@ struct KeywordEditView: View {
             await loadKeywords()
         }
         .onDisappear {
-            saveTask?.cancel()
+            // No cleanup needed
         }
     }
     
@@ -219,42 +248,8 @@ struct KeywordEditView: View {
     }
     
     private func markAsChanged() {
-        print("🔄 Keywords: markAsChanged() called - scheduling save")
-        
-        // Cancel any pending save operation
-        saveTask?.cancel()
-        
-        // Debounce save operations to prevent excessive API calls
-        saveTask = Task {
-            print("🔄 Keywords: Starting 500ms debounce delay...")
-            try? await Task.sleep(for: .milliseconds(500)) // Wait 500ms
-            
-            // Check if task was cancelled during sleep
-            guard !Task.isCancelled else { 
-                print("🔄 Keywords: Save task was cancelled")
-                return 
-            }
-            
-            print("🔄 Keywords: Debounce delay completed, triggering save")
-            await saveKeywords()
-        }
-    }
-    
-    private func timeAgoString(from date: Date) -> String {
-        let interval = Date().timeIntervalSince(date)
-        
-        if interval < 60 {
-            return "now"
-        } else if interval < 3600 {
-            let minutes = Int(interval / 60)
-            return "\(minutes)m ago"
-        } else if interval < 86400 {
-            let hours = Int(interval / 3600)
-            return "\(hours)h ago"
-        } else {
-            let days = Int(interval / 86400)
-            return "\(days)d ago"
-        }
+        print("🔄 Keywords: markAsChanged() called - changes made but not saved")
+        // No automatic saving - user must click Save button
     }
     
     private func markKeywordAsNewlyCreated(_ keyword: String) {
@@ -297,32 +292,6 @@ struct KeywordEditView: View {
                 print("\(indent)  📸 Images: \(node.images.joined(separator: ", "))")
             }
             debugPrintNodeArray(node.children, level: level + 1)
-        }
-    }
-}
-
-struct KeywordToolbarContent: View {
-    let isSaving: Bool
-    let lastSaveTime: Date?
-    let isLoading: Bool
-    let timeAgoString: (Date) -> String
-    let refreshAction: () -> Void
-    
-    var body: some View {
-        HStack {
-            if isSaving {
-                ProgressView()
-                    .scaleEffect(0.8)
-            } else if let lastSaveTime = lastSaveTime {
-                Text("Saved \(timeAgoString(lastSaveTime))")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            
-            Button("Refresh") {
-                refreshAction()
-            }
-            .disabled(isLoading || isSaving)
         }
     }
 }
