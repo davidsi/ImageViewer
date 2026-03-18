@@ -19,6 +19,7 @@ struct ImagesView: View {
     @State private var selectedKeywords: [String] = []
     @State private var availableKeywords: [String] = []
     @State private var sidebarWidth: CGFloat = 200
+    @State private var imageWidth: CGFloat = UserDefaults.standard.object(forKey: "ImageWidth") as? CGFloat ?? 250
     
     private var filteredImages: [ImageMetadata] {
         var filtered = images
@@ -47,9 +48,9 @@ struct ImagesView: View {
     
     private var gridColumns: [GridItem] {
 #if os(macOS)
-        [GridItem(.adaptive(minimum: 200, maximum: 300), spacing: 16)]
+        [GridItem(.adaptive(minimum: imageWidth, maximum: imageWidth), spacing: 16)]
 #else
-        [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 12)]
+        [GridItem(.adaptive(minimum: imageWidth, maximum: imageWidth), spacing: 12)]
 #endif
     }
     
@@ -63,9 +64,12 @@ struct ImagesView: View {
                 filteredImages: filteredImages,
                 isLoading: isLoading,
                 errorMessage: errorMessage,
-                gridColumns: gridColumns,
+                imageWidth: $imageWidth,
                 sidebarWidth: $sidebarWidth,
-                loadImagesAction: { Task { await loadImages() } }
+                loadImagesAction: { Task { await loadImages() } },
+                onImageWidthChanged: { width in
+                    UserDefaults.standard.set(width, forKey: "ImageWidth")
+                }
             )
             .frame(minHeight: 300)
             .navigationTitle("Images")
@@ -118,8 +122,11 @@ struct ImagesView: View {
                         errorMessage: errorMessage,
                         searchText: $searchText,
                         selectedKeywords: $selectedKeywords,
-                        gridColumns: gridColumns,
-                        loadImagesAction: { Task { await loadImages() } }
+                        imageWidth: $imageWidth,
+                        loadImagesAction: { Task { await loadImages() } },
+                        onImageWidthChanged: { width in
+                            UserDefaults.standard.set(width, forKey: "ImageWidth")
+                        }
                     )
                 }
                 .navigationTitle("Images")
@@ -491,77 +498,117 @@ struct ImagesMainView: View {
     let errorMessage: String?
     @Binding var searchText: String
     @Binding var selectedKeywords: [String]
-    let gridColumns: [GridItem]
+    @Binding var imageWidth: CGFloat
     let loadImagesAction: () -> Void
+    let onImageWidthChanged: (CGFloat) -> Void
+    
+    private var gridColumns: [GridItem] {
+#if os(macOS)
+        [GridItem(.adaptive(minimum: imageWidth, maximum: imageWidth), spacing: 16)]
+#else
+        [GridItem(.adaptive(minimum: imageWidth, maximum: imageWidth), spacing: 12)]
+#endif
+    }
     
     var body: some View {
-        Group {
-            if isLoading {
-                VStack {
-                    ProgressView("Loading images...")
-                        .scaleEffect(1.2)
-                    Text("Please wait while we fetch your images")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.top, 8)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let errorMessage = errorMessage {
-                VStack(spacing: 16) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.largeTitle)
-                        .foregroundColor(.orange)
-                    
-                    Text("Error Loading Images")
-                        .font(.headline)
-                    
-                    Text(errorMessage)
-                        .multilineTextAlignment(.center)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal)
-                    
-                    Button("Try Again") {
-                        loadImagesAction()
+        VStack(spacing: 0) {
+            // Main content area
+            Group {
+                if isLoading {
+                    VStack {
+                        ProgressView("Loading images...")
+                            .scaleEffect(1.2)
+                        Text("Please wait while we fetch your images")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.top, 8)
                     }
-                    .buttonStyle(.borderedProminent)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if filteredImages.isEmpty {
-                VStack(spacing: 16) {
-                    Image(systemName: "photo.on.rectangle")
-                        .font(.largeTitle)
-                        .foregroundColor(.secondary)
-                    
-                    Text("No Images Found")
-                        .font(.headline)
-                    
-                    if selectedKeywords.isEmpty && searchText.isEmpty {
-                        Text("Upload images to your Dropbox folder to get started")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let errorMessage = errorMessage {
+                    VStack(spacing: 16) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.largeTitle)
+                            .foregroundColor(.orange)
+                        
+                        Text("Error Loading Images")
+                            .font(.headline)
+                        
+                        Text(errorMessage)
                             .multilineTextAlignment(.center)
                             .foregroundColor(.secondary)
-                    } else {
-                        Text("No images match your current filters")
-                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                        
+                        Button("Try Again") {
+                            loadImagesAction()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if filteredImages.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "photo.on.rectangle")
+                            .font(.largeTitle)
                             .foregroundColor(.secondary)
                         
-                        Button("Clear Filters") {
-                            searchText = ""
-                            selectedKeywords.removeAll()
+                        Text("No Images Found")
+                            .font(.headline)
+                        
+                        if selectedKeywords.isEmpty && searchText.isEmpty {
+                            Text("Upload images to your Dropbox folder to get started")
+                                .multilineTextAlignment(.center)
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text("No images match your current filters")
+                                .multilineTextAlignment(.center)
+                                .foregroundColor(.secondary)
+                            
+                            Button("Clear Filters") {
+                                searchText = ""
+                                selectedKeywords.removeAll()
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        .buttonStyle(.bordered)
                     }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVGrid(columns: gridColumns, spacing: 16) {
-                        ForEach(filteredImages) { metadata in
-                            ImageTileView(metadata: metadata)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: gridColumns, spacing: 16) {
+                            ForEach(filteredImages) { metadata in
+                                ImageTileView(metadata: metadata)
+                            }
                         }
+                        .padding()
                     }
-                    .padding()
                 }
             }
+            
+            // Image width slider - Always show for testing
+            Divider()
+            HStack {
+                Image(systemName: "photo.on.rectangle")
+                    .foregroundColor(.secondary)
+                
+                Slider(value: $imageWidth, in: 100...400, step: 10) { editing in
+                    if !editing {
+                        onImageWidthChanged(imageWidth)
+                    }
+                }
+                
+                Image(systemName: "photo.on.rectangle.fill")
+                    .foregroundColor(.secondary)
+                    .font(.title3)
+                
+                Text("\(Int(imageWidth))px")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(width: 45, alignment: .trailing)
+                
+                Text("Images: \(filteredImages.count)")
+                    .font(.caption2)
+                    .foregroundColor(.blue)
+            }
+            .padding()
+            .background(Color.yellow.opacity(0.2)) // Make it visible for debugging
         }
     }
 }
@@ -575,9 +622,10 @@ struct ResizableSidebarView: View {
     let filteredImages: [ImageMetadata]
     let isLoading: Bool
     let errorMessage: String?
-    let gridColumns: [GridItem]
+    @Binding var imageWidth: CGFloat
     @Binding var sidebarWidth: CGFloat
     let loadImagesAction: () -> Void
+    let onImageWidthChanged: (CGFloat) -> Void
     
     var body: some View {
         GeometryReader { geometry in
@@ -604,8 +652,9 @@ struct ResizableSidebarView: View {
                     errorMessage: errorMessage,
                     searchText: $searchText,
                     selectedKeywords: $selectedKeywords,
-                    gridColumns: gridColumns,
-                    loadImagesAction: loadImagesAction
+                    imageWidth: $imageWidth,
+                    loadImagesAction: loadImagesAction,
+                    onImageWidthChanged: onImageWidthChanged
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
