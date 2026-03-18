@@ -36,6 +36,75 @@ class DropboxService: ObservableObject {
     
     // MARK: - Token Management
     
+    func isAuthenticated() -> Bool {
+        return DropboxClientsManager.authorizedClient != nil
+    }
+    
+    /// Completely clear all Dropbox authentication and force re-authentication
+    func forceReauthentication() {
+        print("🔄 Dropbox: Forcing complete re-authentication...")
+        
+        // Clear the client
+        DropboxClientsManager.unlinkClients()
+        DropboxClientsManager.authorizedClient = nil
+        
+        // Clear any stored credentials
+        userSettings.clearDropboxCredentials()
+        
+        // Clear any cached tokens from keychain
+        if let bundleId = Bundle.main.bundleIdentifier {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: bundleId + ".dropbox"
+            ]
+            let deleteResult = SecItemDelete(query as CFDictionary)
+            print("🔄 Dropbox: Keychain clear result: \(deleteResult)")
+        }
+        
+        // Also clear any SwiftyDropbox specific stored tokens
+        UserDefaults.standard.removeObject(forKey: "dropbox_access_token")
+        UserDefaults.standard.removeObject(forKey: "dropbox_refresh_token") 
+        UserDefaults.standard.removeObject(forKey: "dropbox_token_uid")
+        UserDefaults.standard.synchronize()
+        
+        print("🔄 Dropbox: All authentication data cleared. Please re-authenticate.")
+    }
+    
+    /// Debug method to check what permissions the current token has
+    func debugTokenPermissions() async {
+        guard let client = DropboxClientsManager.authorizedClient else {
+            print("🔍 Token Debug: No authorized client available")
+            return
+        }
+        
+        print("🔍 Token Debug: Testing various API endpoints to determine token scope...")
+        
+        // Test files.metadata.read (should work)
+        print("🔍 Token Debug: Testing files.metadata.read scope...")
+        client.files.listFolder(path: "").response { result, error in
+            if result != nil {
+                print("🔍 Token Debug: ✅ files.metadata.read - WORKING")
+            } else {
+                print("🔍 Token Debug: ❌ files.metadata.read - FAILED: \(String(describing: error))")
+            }
+        }
+        
+        // Test files.content.read (should fail based on errors)
+        print("🔍 Token Debug: Testing files.content.read scope...")
+        client.files.download(path: "/keywords.json").response { result, error in
+            if result != nil {
+                print("🔍 Token Debug: ✅ files.content.read - WORKING")
+            } else {
+                print("🔍 Token Debug: ❌ files.content.read - FAILED: \(String(describing: error))")
+            }
+        }
+        
+        // Test files.content.write (should work based on successful uploads)
+        print("🔍 Token Debug: files.content.write appears to be working (uploads succeed)")
+        
+        print("🔍 Token Debug: Summary - Your token seems to have files.metadata.* and files.content.write but NOT files.content.read")
+    }
+    
     private func handleExpiredToken() async throws {
         print("📂 Dropbox: Handling expired token - clearing client and requiring re-authentication")
         
@@ -72,21 +141,77 @@ class DropboxService: ObservableObject {
     
     // Test basic connectivity to Dropbox
     func testConnectivity() async -> Bool {
-        guard let client = DropboxClientsManager.authorizedClient else {
-            print("📂 Test: No authorized client")
+        print("📂 Test: Starting connectivity test...")
+        print("📂 Test: Current thread: \(Thread.current)")
+        
+        // Check if DropboxClientsManager is initialized at all
+        print("📂 Test: DropboxClientsManager class: \(String(describing: DropboxClientsManager.self))")
+        
+        // Check if we have an authorized client
+        print("📂 Test: Checking DropboxClientsManager.authorizedClient...")
+        let authorizedClient = DropboxClientsManager.authorizedClient
+        print("📂 Test: DropboxClientsManager.authorizedClient = \(String(describing: authorizedClient))")
+        
+        guard let client = authorizedClient else {
+            print("📂 Test: ❌ No authorized client available")
+            print("📂 Test: ❌ DropboxClientsManager.authorizedClient is nil")
+            
+            // Check if there are any clients at all
+            print("📂 Test: Checking if SDK is initialized...")
+            
             return false
         }
         
-        return await withCheckedContinuation { continuation in
-            client.users.getCurrentAccount().response { result, error in
-                if result != nil {
-                    print("📂 Test: Connectivity successful")
-                    continuation.resume(returning: true)
-                } else {
-                    print("📂 Test: Connectivity failed: \(error?.localizedDescription ?? "unknown")")
-                    continuation.resume(returning: false)
+        print("📂 Test: ✅ Authorized client exists: \(String(describing: client))")
+        print("📂 Test: Client type: \(type(of: client))")
+        
+        // Test token scopes by trying to get current account info
+        do {
+            return try await withCheckedThrowingContinuation { continuation in
+                print("📂 Test: About to make getCurrentAccount API call...")
+                
+                let request = client.users.getCurrentAccount()
+                print("📂 Test: Created request: \(String(describing: request))")
+                
+                request.response { result, error in
+                    print("📂 Test: Received response in callback")
+                    print("📂 Test: Result: \(String(describing: result))")
+                    print("📂 Test: Error: \(String(describing: error))")
+                    
+                    if let result = result {
+                        print("📂 Test: ✅ Connectivity successful - User: \(result.name.displayName)")
+                        
+                        // Now test if we can download a file to check scopes
+                        print("📂 Test: Testing file download capabilities...")
+                        let testRequest = client.files.download(path: "/keywords.json")
+                        testRequest.response { downloadResult, downloadError in
+                            if downloadResult != nil {
+                                print("📂 Test: ✅ files.content.read scope confirmed - can download files")
+                            } else if let downloadError = downloadError {
+                                print("📂 Test: ❌ files.content.read scope issue: \(downloadError)")
+                                print("📂 Test: ❌ This confirms the token lacks required scopes")
+                            }
+                        }
+                        
+                        continuation.resume(returning: true)
+                    } else if let error = error {
+                        print("📂 Test: ❌ Connectivity failed with error: \(error)")
+                        print("📂 Test: ❌ Error type: \(type(of: error))")
+                        print("📂 Test: ❌ Error description: \(error.description)")
+                        print("📂 Test: ❌ Localized description: \(error.localizedDescription)")
+                        continuation.resume(returning: false)
+                    } else {
+                        print("📂 Test: ❌ Connectivity failed: Unknown error (no result and no error)")
+                        continuation.resume(returning: false)
+                    }
                 }
+                
+                print("📂 Test: API call initiated, waiting for response...")
             }
+        } catch {
+            print("📂 Test: ❌ Exception during connectivity test: \(error)")
+            print("📂 Test: ❌ Exception type: \(type(of: error))")
+            return false
         }
     }
     
@@ -373,6 +498,8 @@ class DropboxService: ObservableObject {
             }
             
             print("📥 Dropbox: Downloading \(metadata.filename)")
+            print("📥 Dropbox: From path: '\(metadata.dropboxPath)'")
+            print("📥 Dropbox: To local path: \(localURL.path)")
             
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 client.files.download(path: metadata.dropboxPath, overwrite: true, destination: localURL)
@@ -382,6 +509,7 @@ class DropboxService: ObservableObject {
                             continuation.resume()
                         } else if let error = error {
                             print("📥 Dropbox: Error downloading \(metadata.filename): \(error)")
+                            print("📥 Dropbox: Attempted path: '\(metadata.dropboxPath)'")
                             continuation.resume(throwing: DropboxError.downloadFailed(error.description))
                         } else {
                             continuation.resume(throwing: DropboxError.unknown)

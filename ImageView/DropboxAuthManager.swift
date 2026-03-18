@@ -20,11 +20,12 @@ class DropboxAuthManager: ObservableObject {
     private let userSettings = UserSettings.shared
     
     // Track if user explicitly logged out to prevent auto-login
+    //
     @Published private var hasExplicitlyLoggedOut = false
     
-    // Dropbox app key
+    // Dropbox app key - UPDATE THIS WITH YOUR NEW APP KEY
     //
-    private let dropboxAppKey = "p5vjk34y9h6ucmk"
+    private let dropboxAppKey = "sua670w0k40zruc"
     
     init() {
         setupDropboxSDK()

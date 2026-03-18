@@ -132,13 +132,16 @@ struct ContentView: View {
         checkingICloud = false
 
         // Set initial selection based on authentication state
+        print("🔍 ContentView: Auth status: \(dropboxAuthManager.isAuthenticated), current selection: \(String(describing: selection))")
         if dropboxAuthManager.isAuthenticated {
-            if selection != .images {
+            if selection == nil || selection == .authentication {
                 selection = .images
+                print("🔍 ContentView: Setting selection to images")
             }
         } else {
-            if selection != .authentication {
+            if selection == nil || selection != .authentication {
                 selection = .authentication
+                print("🔍 ContentView: Setting selection to authentication")
             }
         }
     }

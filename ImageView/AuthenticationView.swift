@@ -103,6 +103,31 @@ struct AuthenticationView: View {
                                     .padding(.vertical, 8)
                             }
                             .buttonStyle(.bordered)
+                            
+                            Button {
+                                Task {
+                                    await DropboxService.shared.debugTokenPermissions()
+                                }
+                            } label: {
+                                Label("Debug Token Scopes", systemImage: "info.circle")
+                                    .font(.headline)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.bordered)
+                            .foregroundColor(.blue)
+                            
+                            Button {
+                                DropboxService.shared.forceReauthentication()
+                                dropboxAuthManager.logout()
+                            } label: {
+                                Label("Force Re-authenticate", systemImage: "arrow.counterclockwise.circle")
+                                    .font(.headline)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.bordered)
+                            .foregroundColor(.orange)
                         }
                     } else {
                         VStack(spacing: 12) {

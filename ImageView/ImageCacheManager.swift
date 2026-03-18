@@ -88,15 +88,22 @@ class ImageCacheManager: ObservableObject {
         // Check if already downloading
         let cacheKey = metadata.contentHash ?? metadata.filename
         
+        print("💾 Cache: Attempting to download and cache \(metadata.filename)")
+        print("💾 Cache: Dropbox path: '\(metadata.dropboxPath)'")
+        print("💾 Cache: Cache key: '\(cacheKey)'")
+        
         do {
             let fileName = "\(cacheKey).\(getFileExtension(metadata.filename))"
             let localURL = cacheDirectory.appendingPathComponent(fileName)
+            
+            print("💾 Cache: Local cache path: \(localURL.path)")
             
             // Download from Dropbox
             try await DropboxService.shared.downloadImage(metadata: metadata, to: localURL)
             
             // Load and cache the image
             if let image = loadImageFromDisk(localURL.path) {
+                print("💾 Cache: Successfully loaded image from disk: \(metadata.filename)")
                 await MainActor.run {
                     let cachedImage = CachedImage(
                         cacheKey: cacheKey,
@@ -112,6 +119,8 @@ class ImageCacheManager: ObservableObject {
                 }
                 
                 return image
+            } else {
+                print("💾 Cache: Failed to load image from disk after download: \(metadata.filename)")
             }
         } catch {
             print("💾 Cache: Failed to download and cache \(metadata.filename): \(error)")
