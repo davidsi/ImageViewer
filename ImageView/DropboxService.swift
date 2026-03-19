@@ -449,6 +449,12 @@ class DropboxService: ObservableObject {
                     }
                 }
                 print("📂 Dropbox: Keywords save operation completed successfully")
+                
+                // Update the cached keyword tree after successful save
+                await MainActor.run {
+                    self.cachedKeywordTree = keywordTree
+                    print("📂 Dropbox: Updated cached keyword tree after save")
+                }
             } catch {
                 print("📂 Dropbox: Keywords save failed: \(error.localizedDescription)")
                 throw DropboxError.apiError("Failed to encode keywords: \(error.localizedDescription)")
@@ -734,6 +740,40 @@ class DropboxService: ObservableObject {
         }
         
         print("📂 Dropbox: File rename process completed. Renamed \(renameOperations.count) files.")
+    }
+    
+    // MARK: - File Upload
+    
+    func uploadFile(data: Data, filename: String) async throws {
+        try await executeWithTokenRefresh {
+            guard let client = DropboxClientsManager.authorizedClient else {
+                throw DropboxError.notAuthenticated
+            }
+            
+            let uploadPath = self.dropboxPath(self.inspirationFolder, filename)
+            print("📂 Dropbox: Uploading file to '\(uploadPath)'")
+            
+            return try await withCheckedThrowingContinuation { continuation in
+                client.files.upload(
+                    path: uploadPath,
+                    mode: Files.WriteMode.overwrite,
+                    autorename: false,
+                    clientModified: Date(),
+                    mute: false,
+                    input: data
+                ).response { result, error in
+                    if let result = result {
+                        print("📂 Dropbox: Successfully uploaded '\(filename)'")
+                        continuation.resume()
+                    } else if let error = error {
+                        print("📂 Dropbox: Failed to upload '\(filename)': \(error)")
+                        continuation.resume(throwing: DropboxError.apiError(error.description))
+                    } else {
+                        continuation.resume(throwing: DropboxError.unknown)
+                    }
+                }
+            }
+        }
     }
 }
 

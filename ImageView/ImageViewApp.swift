@@ -27,7 +27,7 @@ struct ImageViewApp: App {
     }()
 
     var body: some Scene {
-        WindowGroup {
+        Window("ImageView", id: "main-window") {
             ContentView()
                 .environmentObject(dropboxAuthManager)
                 .onOpenURL { url in
@@ -36,5 +36,6 @@ struct ImageViewApp: App {
                 }
         }
         .modelContainer(sharedModelContainer)
+        .windowResizability(.contentSize)
     }
 }

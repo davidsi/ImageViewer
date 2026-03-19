@@ -171,6 +171,17 @@ struct KeywordEditView: View {
         .task {
             await loadKeywords()
         }
+        .onAppear {
+            // Refresh from cached data when view appears to ensure consistency
+            Task {
+                if let cached = dropboxService.cachedKeywordTree {
+                    keywordTree = cached
+                    print("📱 Keywords: Loaded from cached tree on appear")
+                } else {
+                    await loadKeywords()
+                }
+            }
+        }
         .onDisappear {
             // No cleanup needed
         }
