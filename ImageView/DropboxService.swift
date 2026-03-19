@@ -369,12 +369,21 @@ class DropboxService: ObservableObject {
                         }
                         
                         do {
-                            let keywords = try JSONDecoder().decode(KeywordTree.self, from: result.1)
-                            print("📂 Dropbox: Successfully loaded keywords with current format")
-                            continuation.resume(returning: keywords)
+                            // Try new KeywordData format first
+                            let keywordData = try JSONDecoder().decode(KeywordData.self, from: result.1)
+                            print("📂 Dropbox: Successfully loaded keywords with new KeywordData format")
+                            continuation.resume(returning: keywordData.Keywords)
                         } catch {
-                            print("📂 Dropbox: Error parsing keywords JSON: \(error)")
-                            continuation.resume(throwing: DropboxError.apiError("Invalid keywords file format"))
+                            print("📂 Dropbox: New format failed, trying legacy KeywordTree format: \(error)")
+                            do {
+                                // Fall back to old KeywordTree format for backward compatibility
+                                let keywordTree = try JSONDecoder().decode(KeywordTree.self, from: result.1)
+                                print("📂 Dropbox: Successfully loaded keywords with legacy KeywordTree format")
+                                continuation.resume(returning: keywordTree)
+                            } catch {
+                                print("📂 Dropbox: Error parsing keywords JSON with both formats: \(error)")
+                                continuation.resume(throwing: DropboxError.apiError("Invalid keywords file format"))
+                            }
                         }
                     } else if let error = error {
                         print("📂 Dropbox: Keywords file not found: \(error)")
@@ -390,7 +399,7 @@ class DropboxService: ObservableObject {
                         Task {
                             do {
                                 try await self.saveKeywords(defaultTree)
-                                print("📂 Dropbox: Successfully created default keywords file")
+                                print("📂 Dropbox: Successfully created default keywords file with new KeywordData format (Keywords + Groups)")
                             } catch {
                                 print("📂 Dropbox: Failed to create default keywords file: \(error)")
                             }
@@ -425,8 +434,16 @@ class DropboxService: ObservableObject {
             print("📂 Dropbox: Folder: '\(self.inspirationFolder)', Filename: '\(self.keywordsFileName)'")
             
             do {
-                let jsonData = try JSONEncoder().encode(keywordTree)
-                print("📂 Dropbox: Encoded \(jsonData.count) bytes of keyword data")
+                // Wrap the keywordTree in the new KeywordData structure
+                let keywordData = KeywordData(keywordTree: keywordTree)
+                let jsonData = try JSONEncoder().encode(keywordData)
+                print("📂 Dropbox: Encoded \(jsonData.count) bytes of keyword data with new KeywordData format (Keywords + Groups)")
+                
+                // Debug: Show structure of new JSON format
+                if let jsonString = String(data: jsonData, encoding: .utf8) {
+                    print("📂 Dropbox: New JSON structure preview (first 200 chars):")
+                    print(String(jsonString.prefix(200)) + (jsonString.count > 200 ? "..." : ""))
+                }
                 
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                     print("📂 Dropbox: Starting upload to '\(keywordsPath)'...")

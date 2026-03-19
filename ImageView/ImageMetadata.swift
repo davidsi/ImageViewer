@@ -194,6 +194,23 @@ struct KeywordTree: Codable {
     }
 }
 
+// MARK: - Top-level JSON Structure
+
+struct KeywordData: Codable {
+    var Keywords: KeywordTree
+    var Groups: [String] // Will be expanded later
+    
+    init() {
+        Keywords = KeywordTree()
+        Groups = []
+    }
+    
+    init(keywordTree: KeywordTree, groups: [String] = []) {
+        Keywords = keywordTree
+        Groups = groups
+    }
+}
+
 struct KeywordTreeNode: Codable {
     var name: String
     var images: [String]
