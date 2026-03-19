@@ -248,6 +248,27 @@ struct ImagesView: View {
             let loadedImages = try await dropboxService.fetchImageList()
             print("📱 Images: Successfully fetched \(loadedImages.count) images")
             
+            // Process and rename files to sequential format if needed
+            do {
+                print("📱 Images: Checking for files that need renaming...")
+                try await dropboxService.processAndRenameFiles()
+                print("📱 Images: File renaming process completed")
+                
+                // Refetch image list after potential renaming
+                let updatedImages = try await dropboxService.fetchImageList()
+                print("📱 Images: Refetched images after renaming: \(updatedImages.count)")
+                
+                await MainActor.run {
+                    images = updatedImages
+                }
+            } catch {
+                print("⚠️ Images: File renaming failed: \(error)")
+                // Use original images if renaming fails
+                await MainActor.run {
+                    images = loadedImages
+                }
+            }
+            
             // Load available keywords
             do {
                 print("📱 Images: Attempting to fetch keywords...")
@@ -267,14 +288,14 @@ struct ImagesView: View {
             }
             
             await MainActor.run {
-                images = loadedImages
                 isLoading = false
             }
             
-            print("📱 Images: Successfully loaded \(loadedImages.count) images from Dropbox")
+            let finalImageCount = images.count
+            print("📱 Images: Successfully loaded \(finalImageCount) images from Dropbox")
             
             // Show helpful message if no images found
-            if loadedImages.isEmpty {
+            if finalImageCount == 0 {
                 await MainActor.run {
                     errorMessage = "No images found. Upload images to your Dropbox folder '/Apps/InspirationViewer' to get started."
                     isLoading = false

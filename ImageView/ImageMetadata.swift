@@ -145,6 +145,28 @@ struct KeywordTree: Codable {
         }
     }
     
+    mutating func updateFilenameInAllKeywords(from oldFilename: String, to newFilename: String) {
+        var localChildren = children
+        updateFilenameRecursive(from: oldFilename, to: newFilename, children: &localChildren)
+        children = localChildren
+    }
+    
+    private mutating func updateFilenameRecursive(from oldFilename: String, to newFilename: String, children: inout [KeywordTreeNode]) {
+        for i in children.indices {
+            // Update filename in current node's images array
+            for j in children[i].images.indices {
+                if children[i].images[j] == oldFilename {
+                    children[i].images[j] = newFilename
+                }
+            }
+            
+            // Recursively process children
+            var childChildren = children[i].children
+            updateFilenameRecursive(from: oldFilename, to: newFilename, children: &childChildren)
+            children[i].children = childChildren
+        }
+    }
+    
     // MARK: - Query Methods
     
     func getImageFilenamesForKeyword(_ keyword: String) -> [String]? {

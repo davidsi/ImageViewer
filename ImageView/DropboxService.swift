@@ -626,6 +626,115 @@ class DropboxService: ObservableObject {
         keywordTreeLoadTask = nil
         print("📂 Dropbox: Keyword tree cache invalidated")
     }
+    
+    // MARK: - File Renaming Functions
+    
+    /// Checks if a filename follows the 5-digit pattern (e.g., 00001.jpg)
+    private func isSequentiallyNamed(_ filename: String) -> Bool {
+        let components = filename.split(separator: ".")
+        guard components.count == 2 else { return false }
+        
+        let nameComponent = String(components[0])
+        return nameComponent.count == 5 && nameComponent.allSatisfy { $0.isNumber }
+    }
+    
+    /// Renames a file in Dropbox from oldPath to newPath
+    private func renameFileInDropbox(from oldPath: String, to newPath: String) async throws {
+        try await executeWithTokenRefresh {
+            guard let client = DropboxClientsManager.authorizedClient else {
+                throw DropboxError.notAuthenticated
+            }
+            
+            return try await withCheckedThrowingContinuation { continuation in
+                client.files.moveV2(fromPath: oldPath, toPath: newPath).response { result, error in
+                    if result != nil {
+                        print("📂 Dropbox: Successfully renamed '\(oldPath)' to '\(newPath)'")
+                        continuation.resume()
+                    } else if let error = error {
+                        print("📂 Dropbox: Failed to rename '\(oldPath)': \(error)")
+                        continuation.resume(throwing: DropboxError.apiError(error.description))
+                    } else {
+                        continuation.resume(throwing: DropboxError.unknown)
+                    }
+                }
+            }
+        }
+    }
+    
+    /// Processes and renames any files that don't follow the 5-digit naming convention
+    func processAndRenameFiles() async throws {
+        print("📂 Dropbox: Starting file rename process...")
+        
+        // Get current images list
+        let currentImages = try await fetchImageList()
+        var updatedKeywordTree: KeywordTree
+        if let cached = cachedKeywordTree {
+            updatedKeywordTree = cached
+        } else {
+            updatedKeywordTree = try await fetchKeywords()
+        }
+        var hasChanges = false
+        
+        // Find the highest existing sequential number
+        var maxSequentialNumber = 0
+        var filesToRename: [(old: String, fileExtension: String)] = []
+        
+        for image in currentImages {
+            if isSequentiallyNamed(image.filename) {
+                // Track highest sequential number
+                let components = image.filename.split(separator: ".")
+                if let numberString = components.first,
+                   let number = Int(numberString) {
+                    maxSequentialNumber = max(maxSequentialNumber, number)
+                }
+            } else {
+                // This file needs renaming
+                let components = image.filename.split(separator: ".")
+                let fileExtension = components.count > 1 ? String(components.last!) : "jpg"
+                filesToRename.append((old: image.filename, fileExtension: fileExtension))
+            }
+        }
+        
+        // Assign new sequential names starting from maxSequentialNumber + 1
+        var currentNumber = maxSequentialNumber + 1
+        var renameOperations: [(old: String, new: String)] = []
+        
+        for file in filesToRename {
+            let paddedNumber = String(format: "%05d", currentNumber)
+            let newFilename = "\(paddedNumber).\(file.fileExtension)"
+            renameOperations.append((old: file.old, new: newFilename))
+            currentNumber += 1
+        }
+        
+        // Perform the renaming operations
+        for (oldFilename, newFilename) in renameOperations {
+            let oldPath = dropboxPath(inspirationFolder, oldFilename)
+            let newPath = dropboxPath(inspirationFolder, newFilename)
+            
+            do {
+                try await renameFileInDropbox(from: oldPath, to: newPath)
+                
+                // Update keyword associations
+                updatedKeywordTree.updateFilenameInAllKeywords(from: oldFilename, to: newFilename)
+                hasChanges = true
+                
+                print("📂 Dropbox: Renamed '\(oldFilename)' to '\(newFilename)'")
+            } catch {
+                print("❌ Dropbox: Failed to rename '\(oldFilename)': \(error)")
+            }
+        }
+        
+        // Save updated keyword tree if there were changes
+        if hasChanges {
+            try await saveKeywords(updatedKeywordTree)
+            await MainActor.run {
+                cachedKeywordTree = updatedKeywordTree
+            }
+            print("📂 Dropbox: Updated keyword associations for renamed files")
+        }
+        
+        print("📂 Dropbox: File rename process completed. Renamed \(renameOperations.count) files.")
+    }
 }
 
 enum DropboxError: Error, LocalizedError {
