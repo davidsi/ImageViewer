@@ -287,7 +287,29 @@ struct ImagesView: View {
                                 UserDefaults.standard.set(width, forKey: "ImageWidth")
                             },
                             onCollectCheckedKeywords: collectCheckedKeywords,
-                            dropboxService: dropboxService
+                            dropboxService: dropboxService,
+                            isGroupViewMode: $isGroupViewMode,
+                            onExitGroupViewMode: {
+                                isGroupViewMode = false
+                                currentGroupImages = []
+                            },
+                            onEnterGroupViewMode: { filename in
+                                print("🔍 Group Debug: Checking groups for image: \(filename)")
+                                print("🔍 Group Debug: Total cached groups: \(dropboxService.cachedGroups.count)")
+                                
+                                let containingGroups = dropboxService.getGroupsContainingImages([filename])
+                                print("🔍 Group Debug: Found \(containingGroups.count) groups containing \(filename)")
+                                
+                                if let firstGroup = containingGroups.first {
+                                    print("🔍 Group Debug: Entering group view with \(firstGroup.count) images: \(firstGroup.joined(separator: ", "))")
+                                    currentGroupImages = firstGroup
+                                    isGroupViewMode = true
+                                    isSelectionMode = false
+                                    selectedImages.removeAll()
+                                } else {
+                                    print("🔍 Group Debug: No groups found for image \(filename)")
+                                }
+                            }
                         )
                     }
                     .navigationTitle("Images")
