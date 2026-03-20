@@ -198,14 +198,14 @@ struct KeywordTree: Codable {
 
 struct KeywordData: Codable {
     var Keywords: KeywordTree
-    var Groups: [String] // Will be expanded later
+    var Groups: [[String]] // Array of groups, each group is an array of image filenames
     
     init() {
         Keywords = KeywordTree()
         Groups = []
     }
     
-    init(keywordTree: KeywordTree, groups: [String] = []) {
+    init(keywordTree: KeywordTree, groups: [[String]] = []) {
         Keywords = keywordTree
         Groups = groups
     }

@@ -21,6 +21,7 @@ class DropboxService: ObservableObject {
     
     // Cached keyword tree to avoid repeated Dropbox calls
     @Published var cachedKeywordTree: KeywordTree?
+    @Published var cachedGroups: [[String]] = []
     private var keywordTreeLoadTask: Task<KeywordTree, Error>?
     
     private init() {}
@@ -372,6 +373,13 @@ class DropboxService: ObservableObject {
                             // Try new KeywordData format first
                             let keywordData = try JSONDecoder().decode(KeywordData.self, from: result.1)
                             print("📂 Dropbox: Successfully loaded keywords with new KeywordData format")
+                            
+                            // Cache both keywords and groups
+                            Task { @MainActor in
+                                self.cachedGroups = keywordData.Groups
+                                print("📂 Dropbox: Cached \(keywordData.Groups.count) groups")
+                            }
+                            
                             continuation.resume(returning: keywordData.Keywords)
                         } catch {
                             print("📂 Dropbox: New format failed, trying legacy KeywordTree format: \(error)")
@@ -379,6 +387,13 @@ class DropboxService: ObservableObject {
                                 // Fall back to old KeywordTree format for backward compatibility
                                 let keywordTree = try JSONDecoder().decode(KeywordTree.self, from: result.1)
                                 print("📂 Dropbox: Successfully loaded keywords with legacy KeywordTree format")
+                                
+                                // Initialize empty groups for legacy format
+                                Task { @MainActor in
+                                    self.cachedGroups = []
+                                    print("📂 Dropbox: Initialized empty groups for legacy format")
+                                }
+                                
                                 continuation.resume(returning: keywordTree)
                             } catch {
                                 print("📂 Dropbox: Error parsing keywords JSON with both formats: \(error)")
@@ -434,10 +449,11 @@ class DropboxService: ObservableObject {
             print("📂 Dropbox: Folder: '\(self.inspirationFolder)', Filename: '\(self.keywordsFileName)'")
             
             do {
-                // Wrap the keywordTree in the new KeywordData structure
-                let keywordData = KeywordData(keywordTree: keywordTree)
+                // Wrap the keywordTree in the new KeywordData structure with current cached groups
+                let keywordData = KeywordData(keywordTree: keywordTree, groups: self.cachedGroups)
                 let jsonData = try JSONEncoder().encode(keywordData)
                 print("📂 Dropbox: Encoded \(jsonData.count) bytes of keyword data with new KeywordData format (Keywords + Groups)")
+                print("📂 Dropbox: Saving \(self.cachedGroups.count) groups with keywords")
                 
                 // Debug: Show structure of new JSON format
                 if let jsonString = String(data: jsonData, encoding: .utf8) {
@@ -648,6 +664,64 @@ class DropboxService: ObservableObject {
         keywordTreeLoadTask?.cancel()
         keywordTreeLoadTask = nil
         print("📂 Dropbox: Keyword tree cache invalidated")
+    }
+    
+    // MARK: - Groups Management
+    
+    /// Add selected images to a new group
+    func addImagesToGroup(_ imageFilenames: [String]) async throws {
+        // Add the new group to cached groups
+        await MainActor.run {
+            cachedGroups.append(imageFilenames)
+            print("📂 Dropbox: Added new group with \(imageFilenames.count) images")
+        }
+        
+        // Save to Dropbox if we have keywords cached
+        if let keywordTree = cachedKeywordTree {
+            try await saveKeywords(keywordTree)
+        }
+    }
+    
+    /// Remove selected images from all groups they belong to
+    func removeImagesFromGroups(_ imageFilenames: [String]) async throws {
+        await MainActor.run {
+            // Remove images from all groups and remove any empty groups
+            cachedGroups = cachedGroups.compactMap { group in
+                let filteredGroup = group.filter { !imageFilenames.contains($0) }
+                return filteredGroup.isEmpty ? nil : filteredGroup
+            }
+            print("📂 Dropbox: Removed \(imageFilenames.count) images from groups")
+        }
+        
+        // Save to Dropbox if we have keywords cached
+        if let keywordTree = cachedKeywordTree {
+            try await saveKeywords(keywordTree)
+        }
+    }
+    
+    /// Check if any of the given images are currently in groups
+    func areImagesInGroups(_ imageFilenames: [String]) -> Bool {
+        let result = cachedGroups.contains { group in
+            imageFilenames.contains { filename in
+                group.contains(filename)
+            }
+        }
+        print("🔍 DropboxService: areImagesInGroups(\(imageFilenames)) = \(result) (cached groups: \(cachedGroups.count))")
+        return result
+    }
+    
+    /// Get all groups that contain any of the given images
+    func getGroupsContainingImages(_ imageFilenames: [String]) -> [[String]] {
+        let result = cachedGroups.filter { group in
+            imageFilenames.contains { filename in
+                group.contains(filename)
+            }
+        }
+        print("🔍 DropboxService: getGroupsContainingImages(\(imageFilenames)) returned \(result.count) groups")
+        for (index, group) in result.enumerated() {
+            print("🔍   Group \(index): \(group.joined(separator: ", "))")
+        }
+        return result
     }
     
     // MARK: - File Renaming Functions

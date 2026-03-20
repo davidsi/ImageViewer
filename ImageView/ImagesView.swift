@@ -26,9 +26,19 @@ struct ImagesView: View {
     @State private var imageWidth: CGFloat = UserDefaults.standard.object(forKey: "ImageWidth") as? CGFloat ?? 250
     @State private var isSelectionMode = false
     @State private var selectedImages = Set<String>()
+    @State private var isGroupViewMode = false
+    @State private var currentGroupImages: [String] = []
     
     private var filteredImages: [ImageMetadata] {
         var filtered = images
+        
+        // If in group view mode, only show images from the current group
+        if isGroupViewMode {
+            filtered = filtered.filter { image in
+                return currentGroupImages.contains(image.filename)
+            }
+            return filtered // Skip other filters in group view mode
+        }
         
         // Filter by search text
         if !searchText.isEmpty {
@@ -61,6 +71,55 @@ struct ImagesView: View {
     
     var body: some View {
         Group {
+            if isGroupViewMode {
+                // Group view mode - show only images without sidebar
+                ImagesMainView(
+                    filteredImages: filteredImages,
+                    isLoading: isLoading,
+                    errorMessage: errorMessage,
+                    searchText: $searchText,
+                    selectedKeywords: $selectedKeywords,
+                    imageWidth: $imageWidth,
+                    isSelectionMode: $isSelectionMode,
+                    selectedImages: $selectedImages,
+                    loadImagesAction: { Task { await loadImages() } },
+                    onImageWidthChanged: { width in
+                        UserDefaults.standard.set(width, forKey: "ImageWidth")
+                    },
+                    onCollectCheckedKeywords: collectCheckedKeywords,
+                    dropboxService: dropboxService,
+                    isGroupViewMode: $isGroupViewMode,
+                    onExitGroupViewMode: {
+                        isGroupViewMode = false
+                        currentGroupImages = []
+                    },
+                    onEnterGroupViewMode: { filename in
+                        print("🔍 Group Debug: Checking groups for image: \(filename)")
+                        print("🔍 Group Debug: Total cached groups: \(dropboxService.cachedGroups.count)")
+                        
+                        let containingGroups = dropboxService.getGroupsContainingImages([filename])
+                        print("🔍 Group Debug: Found \(containingGroups.count) groups containing \(filename)")
+                        
+                        if let firstGroup = containingGroups.first {
+                            print("🔍 Group Debug: Entering group view with \(firstGroup.count) images: \(firstGroup.joined(separator: ", "))")
+                            currentGroupImages = firstGroup
+                            isGroupViewMode = true
+                            isSelectionMode = false
+                            selectedImages.removeAll()
+                        } else {
+                            print("🔍 Group Debug: No groups found for image \(filename)")
+                        }
+                    }
+                )
+                .navigationTitle("Group View (\(currentGroupImages.count) images)")
+                .toolbar {
+                    ToolbarItem(placement: .primaryAction) {
+                        RefreshButton(isLoading: isLoading) {
+                            Task { await loadImages() }
+                        }
+                    }
+                }
+            } else {
 #if os(macOS)
             ResizableSidebarView(
                 keywordTree: dropboxService.cachedKeywordTree,
@@ -80,7 +139,29 @@ struct ImagesView: View {
                 onKeywordToggle: { keyword in
                     toggleKeywordForSelectedImages(keyword)
                 },
-                onCollectCheckedKeywords: collectCheckedKeywords
+                onCollectCheckedKeywords: collectCheckedKeywords,
+                dropboxService: dropboxService,
+                onEnterGroupViewMode: { filename in
+                    print("🔍 Group Debug: Checking groups for image: \(filename)")
+                    print("🔍 Group Debug: Total cached groups: \(dropboxService.cachedGroups.count)")
+                    
+                    let containingGroups = dropboxService.getGroupsContainingImages([filename])
+                    print("🔍 Group Debug: Found \(containingGroups.count) groups containing \(filename)")
+                    
+                    if let firstGroup = containingGroups.first {
+                        print("🔍 Group Debug: Entering group view with \(firstGroup.count) images: \(firstGroup.joined(separator: ", "))")
+                        currentGroupImages = firstGroup
+                        isGroupViewMode = true
+                        isSelectionMode = false
+                        selectedImages.removeAll()
+                    } else {
+                        print("🔍 Group Debug: No groups found for image \(filename)")
+                    }
+                },
+                onExitGroupViewMode: {
+                    isGroupViewMode = false
+                    currentGroupImages = []
+                }
             )
             .frame(minHeight: 300)
             .navigationTitle("Images")
@@ -112,7 +193,29 @@ struct ImagesView: View {
                     onKeywordToggle: { keyword in
                         toggleKeywordForSelectedImages(keyword)
                     },
-                    onCollectCheckedKeywords: collectCheckedKeywords
+                    onCollectCheckedKeywords: collectCheckedKeywords,
+                    dropboxService: dropboxService,
+                    onEnterGroupViewMode: { filename in
+                        print("🔍 Group Debug: Checking groups for image: \(filename)")
+                        print("🔍 Group Debug: Total cached groups: \(dropboxService.cachedGroups.count)")
+                        
+                        let containingGroups = dropboxService.getGroupsContainingImages([filename])
+                        print("🔍 Group Debug: Found \(containingGroups.count) groups containing \(filename)")
+                        
+                        if let firstGroup = containingGroups.first {
+                            print("🔍 Group Debug: Entering group view with \(firstGroup.count) images: \(firstGroup.joined(separator: ", "))")
+                            currentGroupImages = firstGroup
+                            isGroupViewMode = true
+                            isSelectionMode = false
+                            selectedImages.removeAll()
+                        } else {
+                            print("🔍 Group Debug: No groups found for image \(filename)")
+                        }
+                    },
+                    onExitGroupViewMode: {
+                        isGroupViewMode = false
+                        currentGroupImages = []
+                    }
                 )
                 .frame(minHeight: 300)
                 .navigationTitle("Images")
@@ -174,7 +277,8 @@ struct ImagesView: View {
                             onImageWidthChanged: { width in
                                 UserDefaults.standard.set(width, forKey: "ImageWidth")
                             },
-                            onCollectCheckedKeywords: collectCheckedKeywords
+                            onCollectCheckedKeywords: collectCheckedKeywords,
+                            dropboxService: dropboxService
                         )
                     }
                     .navigationTitle("Images")
@@ -187,9 +291,10 @@ struct ImagesView: View {
                         }
                     }
                 }
-            }
+            } // Close the else block for iPad/iPhone check 
 #endif
-        }
+            } // Close the else block for isGroupViewMode  
+        } // Close the Group block
         .onAppear {
             print("🔍 ImagesView: onAppear called - about to load images")
             print("🔍 ImagesView: Authentication status: \(dropboxService.isAuthenticated())")
@@ -202,7 +307,7 @@ struct ImagesView: View {
                 await loadImages()
             }
         }
-    }
+    } // Close the body
     
     private func loadImages() async {
         print("🔍 Images: Starting loadImages() function")
@@ -534,10 +639,21 @@ struct ImageTileView: View {
     let isSelectionMode: Bool
     let isSelected: Bool
     let onSelectionToggle: () -> Void
+    let dropboxService: DropboxService
+    let onGroupTap: () -> Void
     
     @StateObject private var cacheManager = ImageCacheManager.shared
     @State private var image: PlatformImage?
     @State private var isLoading = false
+    
+    private var isInGroup: Bool {
+        let result = dropboxService.areImagesInGroups([metadata.filename])
+        // Only log occasionally to avoid spam
+        if result {
+            print("🏷️ ImageTile: \(metadata.filename) is IN a group (showing group icon)")
+        }
+        return result
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -588,6 +704,29 @@ struct ImageTileView: View {
                                     .foregroundColor(isSelected ? .blue : .gray)
                                     .font(.title3)
                             }
+                            .padding(8)
+                        }
+                        Spacer()
+                    }
+                }
+                
+                // Group indicator overlay (when NOT in selection mode)
+                if !isSelectionMode && isInGroup {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Button(action: onGroupTap) {
+                                ZStack {
+                                    Circle()
+                                        .fill(Color.orange.opacity(0.9))
+                                        .frame(width: 24, height: 24)
+                                    
+                                    Image(systemName: "rectangle.3.group.fill")
+                                        .foregroundColor(.white)
+                                        .font(.caption)
+                                }
+                            }
+                            .buttonStyle(PlainButtonStyle())
                             .padding(8)
                         }
                         Spacer()
@@ -929,6 +1068,10 @@ struct ImagesMainView: View {
     let loadImagesAction: () -> Void
     let onImageWidthChanged: (CGFloat) -> Void
     let onCollectCheckedKeywords: () -> [String]
+    @ObservedObject var dropboxService: DropboxService
+    @Binding var isGroupViewMode: Bool
+    let onExitGroupViewMode: () -> Void
+    let onEnterGroupViewMode: (String) -> Void
     
     private var gridColumns: [GridItem] {
 #if os(macOS)
@@ -943,7 +1086,10 @@ struct ImagesMainView: View {
             // Local toolbar for images subpane
             HStack {
                 Button(action: {
-                    if isSelectionMode {
+                    if isGroupViewMode {
+                        // Exit group view mode
+                        onExitGroupViewMode()
+                    } else if isSelectionMode {
                         // Simply exit selection mode without preserving keywords
                         isSelectionMode = false
                         selectedImages.removeAll()
@@ -952,12 +1098,12 @@ struct ImagesMainView: View {
                         isSelectionMode = true
                     }
                 }) {
-                    Text(isSelectionMode ? "Cancel" : "Select")
-                        .foregroundColor(isSelectionMode ? .red : .blue)
+                    Text(isGroupViewMode ? "Exit Group Mode" : (isSelectionMode ? "Done" : "Select"))
+                        .foregroundColor(isGroupViewMode ? .orange : (isSelectionMode ? .red : .blue))
                         .font(.body)
                 }
                 
-                // Save button next to Cancel/Select button (left-aligned)
+                // Save button next to Done/Select button (left-aligned)
                 if isSelectionMode && !selectedImages.isEmpty {
                     Button(action: {
                         Task {
@@ -984,6 +1130,45 @@ struct ImagesMainView: View {
                             .foregroundColor(.green)
                             .font(.body)
                     }
+                    
+                    // Group button next to Save button
+                    Button(action: {
+                        Task {
+                            do {
+                                // Extract filenames from selected dropbox paths (same as keywords do)
+                                let selectedMetadata = filteredImages.filter { selectedImages.contains($0.dropboxPath) }
+                                let selectedFilenames = selectedMetadata.map { $0.filename }
+                                try await dropboxService.addImagesToGroup(selectedFilenames)
+                                print("📦 Successfully grouped \(selectedFilenames.count) images: \(selectedFilenames)")
+                            } catch {
+                                print("❌ Failed to create group: \(error)")
+                            }
+                        }
+                    }) {
+                        Text("Group")
+                            .foregroundColor(.orange)
+                            .font(.body)
+                    }
+                    
+                    // Ungroup button next to Group button
+                    Button(action: {
+                        Task {
+                            do {
+                                // Extract filenames from selected dropbox paths (same as keywords do)
+                                let selectedMetadata = filteredImages.filter { selectedImages.contains($0.dropboxPath) }
+                                let selectedFilenames = selectedMetadata.map { $0.filename }
+                                try await dropboxService.removeImagesFromGroups(selectedFilenames)
+                                print("📦 Successfully ungrouped \(selectedFilenames.count) images: \(selectedFilenames)")
+                            } catch {
+                                print("❌ Failed to ungroup images: \(error)")
+                            }
+                        }
+                    }) {
+                        Text("Ungroup")
+                            .foregroundColor(.purple)
+                            .font(.body)
+                    }
+                    .disabled(!dropboxService.areImagesInGroups(filteredImages.filter { selectedImages.contains($0.dropboxPath) }.map { $0.filename }))
                 }
                 
                 Spacer()
@@ -1072,6 +1257,12 @@ struct ImagesMainView: View {
                                         } else {
                                             selectedImages.insert(metadata.dropboxPath)
                                         }
+                                    },
+                                    dropboxService: dropboxService,
+                                    onGroupTap: {
+                                        print("🔘 Group Icon: Clicked for image \(metadata.filename)")
+                                        // Enter group view mode for this image
+                                        onEnterGroupViewMode(metadata.filename)
                                     }
                                 )
                             }
@@ -1129,6 +1320,9 @@ struct ResizableSidebarView: View {
     let onImageWidthChanged: (CGFloat) -> Void
     let onKeywordToggle: (String) -> Void
     let onCollectCheckedKeywords: () -> [String]
+    @ObservedObject var dropboxService: DropboxService
+    let onEnterGroupViewMode: (String) -> Void
+    let onExitGroupViewMode: () -> Void
     
     var body: some View {
         GeometryReader { geometry in
@@ -1157,7 +1351,11 @@ struct ResizableSidebarView: View {
                     selectedImages: $selectedImages,
                     loadImagesAction: loadImagesAction,
                     onImageWidthChanged: onImageWidthChanged,
-                    onCollectCheckedKeywords: onCollectCheckedKeywords
+                    onCollectCheckedKeywords: onCollectCheckedKeywords,
+                    dropboxService: dropboxService,
+                    isGroupViewMode: .constant(false),
+                    onExitGroupViewMode: onExitGroupViewMode,
+                    onEnterGroupViewMode: onEnterGroupViewMode
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
