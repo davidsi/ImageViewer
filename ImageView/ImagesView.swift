@@ -26,6 +26,7 @@ struct ImagesView: View {
     @State private var imageWidth: CGFloat = UserDefaults.standard.object(forKey: "ImageWidth") as? CGFloat ?? 250
     @State private var isSelectionMode = false
     @State private var selectedImages = Set<String>()
+    @State private var showKeywordsOnHover = false // macOS only
     @State private var isGroupViewMode = false
     @State private var currentGroupImages: [String] = []
     
@@ -91,6 +92,7 @@ struct ImagesView: View {
                     imageWidth: $imageWidth,
                     isSelectionMode: $isSelectionMode,
                     selectedImages: $selectedImages,
+                    showKeywordsOnHover: $showKeywordsOnHover,
                     loadImagesAction: { Task { await loadImages() } },
                     onImageWidthChanged: { width in
                         UserDefaults.standard.set(width, forKey: "ImageWidth")
@@ -141,6 +143,7 @@ struct ImagesView: View {
                 sidebarWidth: $sidebarWidth,
                 isSelectionMode: $isSelectionMode,
                 selectedImages: $selectedImages,
+                showKeywordsOnHover: $showKeywordsOnHover,
                 loadImagesAction: { Task { await loadImages() } },
                 onImageWidthChanged: { width in
                     UserDefaults.standard.set(width, forKey: "ImageWidth")
@@ -195,6 +198,7 @@ struct ImagesView: View {
                     sidebarWidth: $sidebarWidth,
                     isSelectionMode: $isSelectionMode,
                     selectedImages: $selectedImages,
+                    showKeywordsOnHover: $showKeywordsOnHover,
                     loadImagesAction: { Task { await loadImages() } },
                     onImageWidthChanged: { width in
                         UserDefaults.standard.set(width, forKey: "ImageWidth")
@@ -282,6 +286,7 @@ struct ImagesView: View {
                             imageWidth: $imageWidth,
                             isSelectionMode: $isSelectionMode,
                             selectedImages: $selectedImages,
+                            showKeywordsOnHover: $showKeywordsOnHover,
                             loadImagesAction: { Task { await loadImages() } },
                             onImageWidthChanged: { width in
                                 UserDefaults.standard.set(width, forKey: "ImageWidth")
@@ -688,6 +693,7 @@ struct ImageTileView: View {
     let metadata: ImageMetadata
     let isSelectionMode: Bool
     let isSelected: Bool
+    let showKeywordsOnHover: Bool
     let onSelectionToggle: () -> Void
     let dropboxService: DropboxService
     let onGroupTap: () -> Void
@@ -696,6 +702,7 @@ struct ImageTileView: View {
     @State private var image: PlatformImage?
     @State private var isLoading = false
     @State private var showingKeywordsPopup = false
+    @State private var isHovering = false
     
     private var isInGroup: Bool {
         let result = dropboxService.areImagesInGroups([metadata.filename])
@@ -710,6 +717,67 @@ struct ImageTileView: View {
         guard let keywordTree = dropboxService.cachedKeywordTree else { return [] }
         return getKeywordsForImage(filename: metadata.filename, in: keywordTree.children)
     }
+    
+    // Computed properties to break up complex expressions for type checker
+    private var overlayBorders: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(
+                    (showKeywordsOnHover && !imageKeywords.isEmpty) 
+                        ? Color.orange.opacity(0.8) 
+                        : Color.gray.opacity(0.3), 
+                    lineWidth: (showKeywordsOnHover && !imageKeywords.isEmpty) ? 2 : 1
+                )
+            
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 3)
+        }
+    }
+    
+#if os(macOS)
+    private var hoverKeywordsOverlay: some View {
+        Group {
+            if showKeywordsOnHover && isHovering && !imageKeywords.isEmpty {
+                GeometryReader { geometry in
+                    keywordsPopupContent
+                        .position(
+                            x: geometry.size.width / 2,
+                            y: shouldShowPopupBelow(geometry: geometry) ? geometry.size.height + 30 : -30
+                        )
+                        .zIndex(1000)
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+    }
+    
+    private func shouldShowPopupBelow(geometry: GeometryProxy) -> Bool {
+        let globalFrame = geometry.frame(in: .global)
+        return globalFrame.minY < 120  // Show below if image is in top 120 points
+    }
+    
+    private var keywordsPopupContent: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(imageKeywords.prefix(5), id: \.self) { keyword in
+                Text(keyword)
+                    .font(.caption)
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+            }
+            if imageKeywords.count > 5 {
+                Text("...and \(imageKeywords.count - 5) more")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.8))
+            }
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.black.opacity(0.9))
+                .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
+        )
+    }
+#endif
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -747,6 +815,8 @@ struct ImageTileView: View {
                 }
                 
                 // Keywords info icon (top left, only visible if image has keywords)
+                // Hidden on macOS since hover functionality replaces it
+#if !os(macOS)
                 if !imageKeywords.isEmpty {
                     VStack {
                         HStack {
@@ -770,6 +840,7 @@ struct ImageTileView: View {
                         Spacer()
                     }
                 }
+#endif
                 
                 // Selection overlay
                 if isSelectionMode {
@@ -814,19 +885,21 @@ struct ImageTileView: View {
                     }
                 }
             }
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 3)
-            )
+            .overlay(overlayBorders)
             .onTapGesture {
                 if isSelectionMode {
                     onSelectionToggle()
                 }
             }
+#if os(macOS)
+            .onHover { hovering in
+                isHovering = hovering
+                if hovering && !imageKeywords.isEmpty {
+                    print("🖱️ Hover Debug: Image \(metadata.filename) - hovering=\(hovering), showKeywordsOnHover=\(showKeywordsOnHover), keywords=\(imageKeywords.count)")
+                }
+            }
+            .overlay(hoverKeywordsOverlay, alignment: .center)
+#endif
             .popover(isPresented: $showingKeywordsPopup) {
                 KeywordsPopupView(keywords: imageKeywords, filename: metadata.filename)
 #if os(macOS)
@@ -1284,6 +1357,7 @@ struct ImagesMainView: View {
     @Binding var imageWidth: CGFloat
     @Binding var isSelectionMode: Bool
     @Binding var selectedImages: Set<String>
+    @Binding var showKeywordsOnHover: Bool
     let loadImagesAction: () -> Void
     let onImageWidthChanged: (CGFloat) -> Void
     let onCollectCheckedKeywords: () -> [String]
@@ -1321,6 +1395,24 @@ struct ImagesMainView: View {
                         .foregroundColor(isGroupViewMode ? .orange : (isSelectionMode ? .red : .blue))
                         .font(.body)
                 }
+                
+#if os(macOS)
+                // Show Keywords checkbox (macOS only)
+                if !isGroupViewMode {
+                    Button(action: {
+                        showKeywordsOnHover.toggle()
+                    }) {
+                        HStack {
+                            Image(systemName: showKeywordsOnHover ? "checkmark.square.fill" : "square")
+                                .foregroundColor(showKeywordsOnHover ? .blue : .secondary)
+                            Text("Show Keywords")
+                                .foregroundColor(.primary)
+                        }
+                        .font(.body)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+#endif
                 
                 // Save button next to Done/Select button (left-aligned)
                 if isSelectionMode && !selectedImages.isEmpty {
@@ -1505,6 +1597,7 @@ struct ImagesMainView: View {
                                     metadata: metadata,
                                     isSelectionMode: isSelectionMode,
                                     isSelected: selectedImages.contains(metadata.dropboxPath),
+                                    showKeywordsOnHover: showKeywordsOnHover,
                                     onSelectionToggle: {
                                         if selectedImages.contains(metadata.dropboxPath) {
                                             selectedImages.remove(metadata.dropboxPath)
@@ -1584,6 +1677,7 @@ struct ResizableSidebarView: View {
     @Binding var sidebarWidth: CGFloat
     @Binding var isSelectionMode: Bool
     @Binding var selectedImages: Set<String>
+    @Binding var showKeywordsOnHover: Bool
     let loadImagesAction: () -> Void
     let onImageWidthChanged: (CGFloat) -> Void
     let onKeywordToggle: (String) -> Void
@@ -1617,6 +1711,7 @@ struct ResizableSidebarView: View {
                     imageWidth: $imageWidth,
                     isSelectionMode: $isSelectionMode,
                     selectedImages: $selectedImages,
+                    showKeywordsOnHover: $showKeywordsOnHover,
                     loadImagesAction: loadImagesAction,
                     onImageWidthChanged: onImageWidthChanged,
                     onCollectCheckedKeywords: onCollectCheckedKeywords,
