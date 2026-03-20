@@ -50,11 +50,20 @@ struct ImagesView: View {
         
         // Filter by selected keywords (including child keywords)
         if !selectedKeywords.isEmpty {
-            // Get all image filenames associated with selected keywords and their descendants
-            let associatedFilenames = getImageFilenamesForKeywords(selectedKeywords)
-            
-            filtered = filtered.filter { image in
-                return associatedFilenames.contains(image.filename)
+            // Special case: filter for images with zero keywords
+            if selectedKeywords.contains("__NO_KEYWORDS__") {
+                filtered = filtered.filter { image in
+                    // Check if this image has any keyword associations
+                    guard let keywordTree = dropboxService.cachedKeywordTree else { return true }
+                    return !hasAnyKeywordAssociations(filename: image.filename, in: keywordTree)
+                }
+            } else {
+                // Normal keyword filtering: Get all image filenames associated with selected keywords and their descendants
+                let associatedFilenames = getImageFilenamesForKeywords(selectedKeywords)
+                
+                filtered = filtered.filter { image in
+                    return associatedFilenames.contains(image.filename)
+                }
             }
         }
         
@@ -596,6 +605,25 @@ struct ImagesView: View {
         // Use the KeywordTree's built-in method instead of reimplementing
         return keywordTree.getImageFilenamesForKeyword(keyword)
     }
+    
+    private func hasAnyKeywordAssociations(filename: String, in keywordTree: KeywordTree) -> Bool {
+        return hasKeywordAssociations(filename: filename, in: keywordTree.children)
+    }
+    
+    private func hasKeywordAssociations(filename: String, in nodes: [KeywordTreeNode]) -> Bool {
+        for node in nodes {
+            // Check if this node contains the filename
+            if node.images.contains(filename) {
+                return true
+            }
+            
+            // Recursively check children
+            if hasKeywordAssociations(filename: filename, in: node.children) {
+                return true
+            }
+        }
+        return false
+    }
 }
 
 struct RefreshButton: View {
@@ -645,6 +673,7 @@ struct ImageTileView: View {
     @StateObject private var cacheManager = ImageCacheManager.shared
     @State private var image: PlatformImage?
     @State private var isLoading = false
+    @State private var showingKeywordsPopup = false
     
     private var isInGroup: Bool {
         let result = dropboxService.areImagesInGroups([metadata.filename])
@@ -653,6 +682,11 @@ struct ImageTileView: View {
             print("🏷️ ImageTile: \(metadata.filename) is IN a group (showing group icon)")
         }
         return result
+    }
+    
+    private var imageKeywords: [String] {
+        guard let keywordTree = dropboxService.cachedKeywordTree else { return [] }
+        return getKeywordsForImage(filename: metadata.filename, in: keywordTree.children)
     }
     
     var body: some View {
@@ -687,6 +721,31 @@ struct ImageTileView: View {
                                 .font(.largeTitle)
                                 .foregroundColor(.secondary)
                         }
+                    }
+                }
+                
+                // Keywords info icon (top left, only visible if image has keywords)
+                if !imageKeywords.isEmpty {
+                    VStack {
+                        HStack {
+                            Button(action: {
+                                showingKeywordsPopup = true
+                            }) {
+                                ZStack {
+                                    Circle()
+                                        .fill(Color.blue.opacity(0.9))
+                                        .frame(width: 20, height: 20)
+                                    
+                                    Image(systemName: "tag.fill")
+                                        .foregroundColor(.white)
+                                        .font(.caption2)
+                                }
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .padding(6)
+                            Spacer()
+                        }
+                        Spacer()
                     }
                 }
                 
@@ -735,6 +794,10 @@ struct ImageTileView: View {
             }
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
                     .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 3)
             )
             .onTapGesture {
@@ -742,12 +805,36 @@ struct ImageTileView: View {
                     onSelectionToggle()
                 }
             }
+            .popover(isPresented: $showingKeywordsPopup) {
+                KeywordsPopupView(keywords: imageKeywords, filename: metadata.filename)
+#if os(macOS)
+                    .frame(minWidth: 200, maxWidth: 300)
+#endif
+            }
             
             // No metadata display needed - selection checkboxes show keyword state
         }
         .task {
             await loadImage()
         }
+    }
+    
+    private func getKeywordsForImage(filename: String, in nodes: [KeywordTreeNode], parentPath: String = "") -> [String] {
+        var keywords: [String] = []
+        
+        for node in nodes {
+            let currentPath = parentPath.isEmpty ? node.name : "\(parentPath)/\(node.name)"
+            
+            // Check if this node contains the filename
+            if node.images.contains(filename) {
+                keywords.append(currentPath)
+            }
+            
+            // Recursively check children
+            keywords.append(contentsOf: getKeywordsForImage(filename: filename, in: node.children, parentPath: currentPath))
+        }
+        
+        return keywords
     }
     
     private func loadImage() async {
@@ -781,6 +868,86 @@ struct ImageTileView: View {
                 isLoading = false
             }
         }
+    }
+}
+
+struct KeywordsPopupView: View {
+    let keywords: [String]
+    let filename: String
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Keywords")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    
+                    Text(filename)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+            }
+            
+            Divider()
+            
+            // Keywords list
+            if keywords.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "tag.slash")
+                        .font(.title2)
+                        .foregroundColor(.secondary)
+                    
+                    Text("No keywords assigned")
+                        .font(.body)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(keywords.sorted(), id: \.self) { keyword in
+                            HStack {
+                                Image(systemName: "tag")
+                                    .foregroundColor(.blue)
+                                    .font(.caption)
+                                
+                                Text(keyword)
+                                    .font(.body)
+                                    .foregroundColor(.primary)
+                                
+                                Spacer()
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.blue.opacity(0.1))
+                            .cornerRadius(6)
+                        }
+                    }
+                }
+                .frame(maxHeight: 200)
+            }
+            
+#if os(iOS)
+            // Dismiss button for iOS
+            Button("Done") {
+                dismiss()
+            }
+            .buttonStyle(.borderedProminent)
+            .frame(maxWidth: .infinity)
+#endif
+        }
+        .padding()
+#if os(macOS)
+        .frame(minWidth: 200, maxWidth: 300, minHeight: 100)
+#else 
+        .frame(minWidth: 250, maxWidth: 350, minHeight: 150)
+#endif
     }
 }
 
@@ -832,6 +999,33 @@ struct KeywordsSidebarView: View {
             }
             .padding(.horizontal)
             
+            // Zero keywords filter button
+            HStack {
+                Button(action: {
+                    if selectedKeywords.contains("__NO_KEYWORDS__") {
+                        selectedKeywords.removeAll { $0 == "__NO_KEYWORDS__" }
+                    } else {
+                        selectedKeywords.removeAll()
+                        selectedKeywords.append("__NO_KEYWORDS__")
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: selectedKeywords.contains("__NO_KEYWORDS__") ? "tag.slash.fill" : "tag.slash")
+                            .foregroundColor(selectedKeywords.contains("__NO_KEYWORDS__") ? .white : .orange)
+                        Text("Images with Zero Keywords")
+                            .foregroundColor(selectedKeywords.contains("__NO_KEYWORDS__") ? .white : .orange)
+                            .font(.caption)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(selectedKeywords.contains("__NO_KEYWORDS__") ? Color.orange : Color.orange.opacity(0.1))
+                    .cornerRadius(8)
+                }
+                .buttonStyle(PlainButtonStyle())
+                Spacer()
+            }
+            .padding(.horizontal)
+            
             // Keywords section
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -864,6 +1058,7 @@ struct KeywordsSidebarView: View {
                                     selectedKeywords: $selectedKeywords,
                                     expandedNodes: $expandedNodes,
                                     isSelectionMode: isSelectionMode,
+                                    hasSelectedImages: !selectedImages.isEmpty,
                                     keywordStatusProvider: keywordStatusForSelectedImages,
                                     onKeywordToggle: onKeywordToggle
                                 )
@@ -902,6 +1097,7 @@ struct KeywordTreeNodeView: View {
     @Binding var selectedKeywords: [String]
     @Binding var expandedNodes: Set<String>
     let isSelectionMode: Bool
+    let hasSelectedImages: Bool
     let keywordStatusProvider: (String) -> KeywordStatus
     let onKeywordToggle: (String) -> Void
     
@@ -973,7 +1169,7 @@ struct KeywordTreeNodeView: View {
                             .font(.caption)
                         
                         Text(keyword)
-                            .font(.body)
+                            .font(hasSelectedImages ? .body.italic() : .body)
                             .foregroundColor(.primary)
                             .lineLimit(1)
                         
@@ -996,6 +1192,7 @@ struct KeywordTreeNodeView: View {
                         selectedKeywords: $selectedKeywords,
                         expandedNodes: $expandedNodes,
                         isSelectionMode: isSelectionMode,
+                        hasSelectedImages: hasSelectedImages,
                         keywordStatusProvider: keywordStatusProvider,
                         onKeywordToggle: onKeywordToggle
                     )
@@ -1150,6 +1347,41 @@ struct ImagesMainView: View {
                             .font(.body)
                     }
                     
+                    // Clear Keyword Names button next to Group button
+                    Button(action: {
+                        Task {
+                            do {
+                                // Extract filenames from selected dropbox paths
+                                let selectedMetadata = filteredImages.filter { selectedImages.contains($0.dropboxPath) }
+                                let selectedFilenames = selectedMetadata.map { $0.filename }
+                                
+                                // Remove all keyword associations from selected images
+                                if let keywordTree = DropboxService.shared.cachedKeywordTree {
+                                    // Get all keywords that have associations with the selected images
+                                    let allKeywords = collectAllKeywords(from: keywordTree.children)
+                                    
+                                    // Remove each selected image from all keywords
+                                    for keyword in allKeywords {
+                                        let keywordPath = keyword.components(separatedBy: "/")
+                                        for filename in selectedFilenames {
+                                            try await DropboxService.shared.removeImageFromKeyword(filename: filename, keywordPath: keywordPath)
+                                        }
+                                    }
+                                    
+                                    print("🗑️ Successfully cleared all keyword associations from \(selectedFilenames.count) images")
+                                } else {
+                                    print("⚠️ No cached keyword tree available")
+                                }
+                            } catch {
+                                print("❌ Failed to clear keyword associations: \(error)")
+                            }
+                        }
+                    }) {
+                        Text("Clear Keyword Names")
+                            .foregroundColor(.purple)
+                            .font(.body)
+                    }
+                    
                     // Ungroup button next to Group button
                     Button(action: {
                         Task {
@@ -1300,6 +1532,20 @@ struct ImagesMainView: View {
             .padding()
             .background(Color.yellow.opacity(0.2)) // Make it visible for debugging
         }
+    }
+    
+    private func collectAllKeywords(from nodes: [KeywordTreeNode], parentPath: String = "") -> [String] {
+        var keywords: [String] = []
+        
+        for node in nodes {
+            let currentPath = parentPath.isEmpty ? node.name : "\(parentPath)/\(node.name)"
+            keywords.append(currentPath)
+            
+            // Recursively collect keywords from children
+            keywords.append(contentsOf: collectAllKeywords(from: node.children, parentPath: currentPath))
+        }
+        
+        return keywords
     }
 }
 
