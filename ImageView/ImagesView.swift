@@ -757,17 +757,31 @@ struct ImageTileView: View {
     }
     
     private var keywordsPopupContent: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(imageKeywords.prefix(5), id: \.self) { keyword in
-                Text(keyword)
-                    .font(.caption)
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-            }
-            if imageKeywords.count > 5 {
-                Text("...and \(imageKeywords.count - 5) more")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.8))
+        VStack(alignment: .leading, spacing: 6) {
+            // Filename header
+            Text(metadata.filename)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundColor(.white)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+            
+            if !imageKeywords.isEmpty {
+                Divider()
+                    .background(Color.white.opacity(0.3))
+                
+                // Keywords list
+                ForEach(imageKeywords.prefix(5), id: \.self) { keyword in
+                    Text(keyword)
+                        .font(.caption)
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                }
+                if imageKeywords.count > 5 {
+                    Text("...and \(imageKeywords.count - 5) more")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.8))
+                }
             }
         }
         .padding(8)
