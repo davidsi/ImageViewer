@@ -29,6 +29,7 @@ struct ImagesView: View {
     @State private var showKeywordsOnHover = false // macOS only
     @State private var isGroupViewMode = false
     @State private var currentGroupImages: [String] = []
+    @State private var invertResults = false
     
     private var filteredImages: [ImageMetadata] {
         var filtered = images
@@ -63,7 +64,8 @@ struct ImagesView: View {
                 let associatedFilenames = getImageFilenamesForKeywords(selectedKeywords)
                 
                 filtered = filtered.filter { image in
-                    return associatedFilenames.contains(image.filename)
+                    let hasKeyword = associatedFilenames.contains(image.filename)
+                    return invertResults ? !hasKeyword : hasKeyword
                 }
             }
         }
@@ -93,6 +95,7 @@ struct ImagesView: View {
                     isSelectionMode: $isSelectionMode,
                     selectedImages: $selectedImages,
                     showKeywordsOnHover: $showKeywordsOnHover,
+                    invertResults: $invertResults,
                     loadImagesAction: { Task { await loadImages() } },
                     onImageWidthChanged: { width in
                         UserDefaults.standard.set(width, forKey: "ImageWidth")
@@ -136,6 +139,7 @@ struct ImagesView: View {
                 keywordTree: dropboxService.cachedKeywordTree,
                 selectedKeywords: $selectedKeywords,
                 searchText: $searchText,
+                invertResults: $invertResults,
                 filteredImages: filteredImages,
                 isLoading: isLoading,
                 errorMessage: errorMessage,
@@ -191,6 +195,7 @@ struct ImagesView: View {
                     keywordTree: dropboxService.cachedKeywordTree,
                     selectedKeywords: $selectedKeywords,
                     searchText: $searchText,
+                    invertResults: $invertResults,
                     filteredImages: filteredImages,
                     isLoading: isLoading,
                     errorMessage: errorMessage,
@@ -287,6 +292,7 @@ struct ImagesView: View {
                             isSelectionMode: $isSelectionMode,
                             selectedImages: $selectedImages,
                             showKeywordsOnHover: $showKeywordsOnHover,
+                            invertResults: $invertResults,
                             loadImagesAction: { Task { await loadImages() } },
                             onImageWidthChanged: { width in
                                 UserDefaults.standard.set(width, forKey: "ImageWidth")
@@ -474,6 +480,10 @@ struct ImagesView: View {
     private func toggleKeyword(_ keyword: String) {
         if selectedKeywords.contains(keyword) {
             selectedKeywords.removeAll { $0 == keyword }
+            // Reset invert when no keywords are selected
+            if selectedKeywords.isEmpty {
+                invertResults = false
+            }
         } else {
             selectedKeywords.append(keyword)
         }
@@ -735,25 +745,32 @@ struct ImageTileView: View {
     }
     
 #if os(macOS)
+    private var hoverKeywords: some View {
+        Group {
+            if showKeywordsOnHover && isHovering && !imageKeywords.isEmpty {
+                keywordsPopupContent
+                    .offset(x: -10, y: 10) // Position in bottom-right corner
+                    .zIndex(1001)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+    
     private var hoverKeywordsOverlay: some View {
         Group {
             if showKeywordsOnHover && isHovering && !imageKeywords.isEmpty {
                 GeometryReader { geometry in
                     keywordsPopupContent
                         .position(
-                            x: geometry.size.width / 2,
-                            y: shouldShowPopupBelow(geometry: geometry) ? geometry.size.height + 30 : -30
+                            x: geometry.size.width - 10,  // Near right edge
+                            y: geometry.size.height - 10  // Near bottom edge
                         )
-                        .zIndex(1000)
+                        .zIndex(999)
                         .allowsHitTesting(false)
                 }
+                .zIndex(999)
             }
         }
-    }
-    
-    private func shouldShowPopupBelow(geometry: GeometryProxy) -> Bool {
-        let globalFrame = geometry.frame(in: .global)
-        return globalFrame.minY < 120  // Show below if image is in top 120 points
     }
     
     private var keywordsPopupContent: some View {
@@ -912,7 +929,7 @@ struct ImageTileView: View {
                     print("🖱️ Hover Debug: Image \(metadata.filename) - hovering=\(hovering), showKeywordsOnHover=\(showKeywordsOnHover), keywords=\(imageKeywords.count)")
                 }
             }
-            .overlay(hoverKeywordsOverlay, alignment: .center)
+                        .overlay(hoverKeywords, alignment: .topTrailing)
 #endif
             .popover(isPresented: $showingKeywordsPopup) {
                 KeywordsPopupView(keywords: imageKeywords, filename: metadata.filename)
@@ -1066,6 +1083,7 @@ struct KeywordsSidebarView: View {
     let keywordTree: KeywordTree?
     @Binding var selectedKeywords: [String]
     @Binding var searchText: String
+    @Binding var invertResults: Bool
     let isSelectionMode: Bool
     let selectedImages: Set<String>
     let filteredImages: [ImageMetadata]
@@ -1144,8 +1162,17 @@ struct KeywordsSidebarView: View {
                     if !selectedKeywords.isEmpty && !isSelectionMode {
                         Button("Clear") {
                             selectedKeywords.removeAll()
+                            invertResults = false // Reset invert when clearing
                         }
                         .font(.caption)
+                    }
+                    if keywordTree != nil && !isSelectionMode {
+                        Button(invertResults ? "Show Match" : "Show Inverse") {
+                            invertResults.toggle()
+                        }
+                        .font(.caption)
+                        .foregroundColor(invertResults ? .orange : .blue)
+                        .disabled(selectedKeywords.isEmpty)
                     }
                     if isSelectionMode && !selectedImages.isEmpty {
                         Text("\(selectedImages.count) images")
@@ -1372,6 +1399,7 @@ struct ImagesMainView: View {
     @Binding var isSelectionMode: Bool
     @Binding var selectedImages: Set<String>
     @Binding var showKeywordsOnHover: Bool
+    @Binding var invertResults: Bool
     let loadImagesAction: () -> Void
     let onImageWidthChanged: (CGFloat) -> Void
     let onCollectCheckedKeywords: () -> [String]
@@ -1628,7 +1656,8 @@ struct ImagesMainView: View {
                                 )
                             }
                         }
-                        .padding()
+                        .padding(.horizontal)
+                        .padding(.bottom, 60) // Extra bottom padding to prevent cropping
                     }
                 }
             }
@@ -1684,6 +1713,7 @@ struct ResizableSidebarView: View {
     let keywordTree: KeywordTree?
     @Binding var selectedKeywords: [String]
     @Binding var searchText: String
+    @Binding var invertResults: Bool
     let filteredImages: [ImageMetadata]
     let isLoading: Bool
     let errorMessage: String?
@@ -1704,7 +1734,7 @@ struct ResizableSidebarView: View {
         GeometryReader { geometry in
             HStack(spacing: 0) {
                 // Keywords Sidebar
-                KeywordsSidebarView( keywordTree: keywordTree, selectedKeywords: $selectedKeywords, searchText: $searchText, isSelectionMode: isSelectionMode, selectedImages: selectedImages,
+                KeywordsSidebarView( keywordTree: keywordTree, selectedKeywords: $selectedKeywords, searchText: $searchText, invertResults: $invertResults, isSelectionMode: isSelectionMode, selectedImages: selectedImages,
                                      filteredImages: filteredImages, onKeywordToggle: onKeywordToggle )
                 .frame(width: sidebarWidth)
                 .frame(maxHeight: .infinity)
@@ -1726,6 +1756,7 @@ struct ResizableSidebarView: View {
                     isSelectionMode: $isSelectionMode,
                     selectedImages: $selectedImages,
                     showKeywordsOnHover: $showKeywordsOnHover,
+                    invertResults: .constant(false),
                     loadImagesAction: loadImagesAction,
                     onImageWidthChanged: onImageWidthChanged,
                     onCollectCheckedKeywords: onCollectCheckedKeywords,
