@@ -99,6 +99,22 @@ struct iCloudPhotosView: View {
                         .font(.title2)
                         .fontWeight(.semibold)
                     
+                    VStack(spacing: 8) {
+                        Text("This app needs access to your Photo Library to display iCloud Photos.")
+                            .multilineTextAlignment(.center)
+                        Text("Go to System Settings > Privacy & Security > Photos to enable access.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary) 
+                            .multilineTextAlignment(.center)
+                    }
+                    
+                    Button("Open System Settings") {
+                        #if os(macOS)
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos")!)
+                        #endif
+                    }
+                    .buttonStyle(.borderedProminent)
+                    
 #if os(iOS)
                     Text("Please allow access to your photo library in Settings to view your albums.")
                         .multilineTextAlignment(.center)
@@ -127,8 +143,23 @@ struct iCloudPhotosView: View {
                 }
                 .padding()
             case .notDetermined:
-                ProgressView("Checking photo access...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .scaleEffect(1.2)
+                    Text("Requesting Photo Access")
+                        .font(.headline)
+                    VStack(spacing: 8) {
+                        Text("This will access your local Photo Library, including any iCloud Photos that are synced to this device.")
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.secondary)
+                        Text("Note: Photos stored only in iCloud (not downloaded) won't appear until synced locally.")
+                            .font(.caption)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             @unknown default:
                 Text("Unknown authorization status")
             }

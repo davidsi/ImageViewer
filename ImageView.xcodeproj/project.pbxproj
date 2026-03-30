@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		633E50CF2F78C2020047B0A6 /* ImageView-macOS.xcconfig in Resources */ = {isa = PBXBuildFile; fileRef = 633E50CE2F78C2020047B0A6 /* ImageView-macOS.xcconfig */; };
+		633E50D12F78C2140047B0A6 /* ImageView-iOS.xcconfig in Resources */ = {isa = PBXBuildFile; fileRef = 633E50D02F78C2140047B0A6 /* ImageView-iOS.xcconfig */; };
 		63640F042F676782003636C0 /* SwiftyDropbox in Frameworks */ = {isa = PBXBuildFile; productRef = 63640F032F676782003636C0 /* SwiftyDropbox */; };
 		63640F062F676782003636C0 /* SwiftyDropboxObjC in Frameworks */ = {isa = PBXBuildFile; productRef = 63640F052F676782003636C0 /* SwiftyDropboxObjC */; };
 /* End PBXBuildFile section */
@@ -29,6 +31,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		633E50CE2F78C2020047B0A6 /* ImageView-macOS.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "ImageView-macOS.xcconfig"; sourceTree = "<group>"; };
+		633E50D02F78C2140047B0A6 /* ImageView-iOS.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "ImageView-iOS.xcconfig"; sourceTree = "<group>"; };
 		63640EC92F636656003636C0 /* ImageView.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ImageView.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		63640EDA2F636657003636C0 /* ImageViewTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ImageViewTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		63640EE42F636657003636C0 /* ImageViewUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ImageViewUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -99,6 +103,8 @@
 				63640EDD2F636657003636C0 /* ImageViewTests */,
 				63640EE72F636657003636C0 /* ImageViewUITests */,
 				63640ECA2F636656003636C0 /* Products */,
+				633E50CE2F78C2020047B0A6 /* ImageView-macOS.xcconfig */,
+				633E50D02F78C2140047B0A6 /* ImageView-iOS.xcconfig */,
 			);
 			sourceTree = "<group>";
 		};
@@ -237,6 +243,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				633E50D12F78C2140047B0A6 /* ImageView-iOS.xcconfig in Resources */,
+				633E50CF2F78C2020047B0A6 /* ImageView-macOS.xcconfig in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -296,6 +304,7 @@
 /* Begin XCBuildConfiguration section */
 		63640EEE2F636657003636C0 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 633E50D02F78C2140047B0A6 /* ImageView-iOS.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -303,7 +312,8 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = D53LKYCR42;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = YES; "ENABLE_APP_SANDBOX[sdk=macosx*]" = NO;
+				"ENABLE_APP_SANDBOX[sdk=macosx*]" = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
@@ -323,7 +333,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 0.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.pacificnorthwet.ImageView;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -342,6 +352,7 @@
 		};
 		63640EEF2F636657003636C0 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 633E50D02F78C2140047B0A6 /* ImageView-iOS.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -349,7 +360,8 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = D53LKYCR42;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = YES; "ENABLE_APP_SANDBOX[sdk=macosx*]" = NO;
+				"ENABLE_APP_SANDBOX[sdk=macosx*]" = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
@@ -369,7 +381,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 0.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.pacificnorthwet.ImageView;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;

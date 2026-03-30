@@ -23,6 +23,17 @@ class DropboxAuthManager: ObservableObject {
     //
     @Published private var hasExplicitlyLoggedOut = false
     
+    // Timer for macOS auth checking
+    private var authTimer: Timer?
+    
+    // Prevent multiple credential checks
+    private var hasCheckedCredentials = false
+    private var lastAuthAttempt: Date?
+    private var authRetryCount = 0
+    private let maxAuthRetries = 3
+    private let authRetryDelay: TimeInterval = 30.0 // 30 seconds between retries
+    private var backgroundFetchDisabled = false // Disable background fetch if network issues persist
+    
     // Dropbox app key - UPDATE THIS WITH YOUR NEW APP KEY
     //
     private let dropboxAppKey = "sua670w0k40zruc"
@@ -42,6 +53,22 @@ class DropboxAuthManager: ObservableObject {
     }
     
     func checkExistingCredentials() {
+        guard !hasCheckedCredentials else {
+            print("📱 DropboxAuth: Already checked credentials, skipping")
+            return
+        }
+        
+        // Check if we should delay retry due to recent failure
+        if let lastAttempt = lastAuthAttempt {
+            let timeSinceLastAttempt = Date().timeIntervalSince(lastAttempt)
+            if timeSinceLastAttempt < authRetryDelay && authRetryCount >= maxAuthRetries {
+                print("📱 DropboxAuth: Too many recent auth attempts (\(authRetryCount)), waiting...")
+                isAuthenticated = false
+                return
+            }
+        }
+        
+        hasCheckedCredentials = true
         print("📱 DropboxAuth: Checking existing credentials...")
         Task { @MainActor in
             // Don't auto-login if user explicitly logged out
@@ -116,10 +143,16 @@ class DropboxAuthManager: ObservableObject {
         
         // For macOS, check authorization status periodically since URL callback might not work reliably
         print("📱 DropboxAuth: Starting periodic check for authorization...")
-        Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { timer in
+        authTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
+            guard let self = self else {
+                timer.invalidate()
+                return
+            }
+            
             print("📱 DropboxAuth: Timer check - isAuthenticating: \(self.isAuthenticating)")
             if DropboxClientsManager.authorizedClient != nil {
                 timer.invalidate()
+                self.authTimer = nil
                 print("📱 DropboxAuth: Timer detected authorized client")
                 Task { @MainActor in
                     self.fetchUserInfo()
@@ -127,6 +160,7 @@ class DropboxAuthManager: ObservableObject {
             } else if !self.isAuthenticating {
                 // User cancelled or authentication failed
                 timer.invalidate()
+                self.authTimer = nil
                 print("📱 DropboxAuth: Timer stopped - not authenticating")
             }
         }
@@ -197,15 +231,26 @@ class DropboxAuthManager: ObservableObject {
             return
         }
         
-        print("📱 DropboxAuth: Fetching user info...")
+        // Track this attempt
+        lastAuthAttempt = Date()
+        authRetryCount += 1
+        
+        print("📱 DropboxAuth: Fetching user info... (attempt \(authRetryCount))")
         print("📱 DropboxAuth: Client exists: \(client)")
         print("📱 DropboxAuth: Client type: \(type(of: client))")
         
         // Always try to get real user info from API on both platforms 
         client.users.getCurrentAccount().response { result, error in
             DispatchQueue.main.async {
+                // Invalidate timer since we're done with auth
+                self.authTimer?.invalidate()
+                self.authTimer = nil
+                
                 if let account = result {
                     print("📱 DropboxAuth: Successfully received account info")
+                    
+                    // Reset retry count on success
+                    self.authRetryCount = 0
                     
                     // Save credentials with real user ID
                     if !self.userSettings.hasDropboxCredentials() {
@@ -228,33 +273,87 @@ class DropboxAuthManager: ObservableObject {
                     
                 } else if let error = error {
                     print("📱 DropboxAuth: API Error: \(error)")
-                    print("📱 DropboxAuth: Error details: \(String(describing: error))")
-                    print("📱 DropboxAuth: Error type: \(type(of: error))")
-                    print("📱 DropboxAuth: Error localizedDescription: \(error.localizedDescription)")
-                    // If API call fails, try alternative approach - mark as authenticated but with limited info
-                    print("📱 DropboxAuth: API failed, will mark as authenticated with limited info")
                     
-                    if !self.userSettings.hasDropboxCredentials() {
-                        self.userSettings.saveDropboxCredentials(
-                            accessToken: "sdk_managed_token_limited",
-                            refreshToken: nil,
-                            userId: "dropbox_user"
-                        )
+                    // Check if this is a network error
+                    let isNetworkError = self.isNetworkError(error)
+                    
+                    if isNetworkError && self.authRetryCount < self.maxAuthRetries {
+                        print("📱 DropboxAuth: Network error detected, will retry later")
+                        self.authenticationError = "Network error, will retry automatically"
+                        self.isAuthenticating = false
+                        
+                        // Schedule retry after delay
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+                            if !self.isAuthenticated && !self.hasExplicitlyLoggedOut {
+                                print("📱 DropboxAuth: Retrying user info fetch...")
+                                self.fetchUserInfo()
+                            }
+                        }
+                    } else {
+                        print("📱 DropboxAuth: API failed permanently or max retries reached, marking as authenticated with limited info")
+                        
+                        self.isAuthenticated = true
+                        self.userEmail = "Authenticated User"  
+                        self.userName = "Dropbox User"
+                        self.authenticationError = nil
+                        self.isAuthenticating = false
+                        self.hasExplicitlyLoggedOut = false
+                        
+                        print("📱 DropboxAuth: Marked as authenticated with limited user info")
                     }
-                    
-                    self.isAuthenticated = true
-                    self.userEmail = "Authenticated User"  // Generic but not fake email
-                    self.userName = "Dropbox User"
-                    self.authenticationError = nil
-                    self.isAuthenticating = false
-                    self.hasExplicitlyLoggedOut = false  // Reset logout flag on successful auth
-                    
-                    print("📱 DropboxAuth: Marked as authenticated with limited user info")
                     
                 } else {
                     print("📱 DropboxAuth: Unknown error - no result and no error")
                     self.clearAllAuthenticationData()
                     self.authenticationError = "Failed to fetch user info: Unknown error"
+                }
+            }
+        }
+    }
+    
+    private func isNetworkError(_ error: Any) -> Bool {
+        let errorString = String(describing: error)
+        return errorString.contains("-1003") || // DNS lookup failed
+               errorString.contains("server with the specified hostname could not be found") ||
+               errorString.contains("urlSessionError") ||
+               errorString.contains("network")
+    }
+    
+    @MainActor
+    private func fetchUserInfoInBackground() {
+        guard let client = DropboxClientsManager.authorizedClient else {
+            print("📱 DropboxAuth: No client for background fetch")
+            return
+        }
+        
+        print("📱 DropboxAuth: Background fetch of user info...")
+        
+        client.users.getCurrentAccount().response { result, error in
+            DispatchQueue.main.async {
+                if let account = result {
+                    print("📱 DropboxAuth: Background fetch successful, updating user info")
+                    self.userEmail = account.email
+                    self.userName = account.name.displayName
+                    
+                    // Reset network issue flag on success
+                    self.backgroundFetchDisabled = false
+                    
+                    // Update stored credentials with real user ID if needed
+                    if self.userSettings.hasDropboxCredentials() {
+                        self.userSettings.saveDropboxCredentials(
+                            accessToken: "sdk_managed_token",
+                            refreshToken: nil,
+                            userId: account.accountId
+                        )
+                    }
+                } else {
+                    print("📱 DropboxAuth: Background fetch failed, keeping generic user info")
+                    
+                    // If this is a network error, disable future background fetches to reduce noise
+                    if let error = error, self.isNetworkError(error) {
+                        self.backgroundFetchDisabled = true
+                        print("📱 DropboxAuth: Disabling future background fetches due to network issues")
+                    }
                 }
             }
         }
@@ -268,6 +367,16 @@ class DropboxAuthManager: ObservableObject {
     
     private func clearAllAuthenticationData() {
         print("📱 DropboxAuth: Clearing all authentication data")
+        
+        // Invalidate timer if running
+        authTimer?.invalidate()
+        authTimer = nil
+        
+        // Reset retry tracking
+        authRetryCount = 0
+        lastAuthAttempt = nil
+        hasCheckedCredentials = false
+        backgroundFetchDisabled = false // Reset network issue flag
         
         // Clear SDK-managed authentication more aggressively
         DropboxClientsManager.unlinkClients()

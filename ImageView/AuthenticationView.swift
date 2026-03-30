@@ -6,60 +6,113 @@
 //
 
 import SwiftUI
+#if os(macOS)
 import CloudKit
+#endif
 
 struct AuthenticationView: View {
+    #if os(macOS)
     let iCloudAvailable: Bool
     let openICloudSettings: () -> Void
+    #else
+    let iCloudAvailable: Bool
+    let openICloudSettings: () -> Void
+    #endif
     
     @EnvironmentObject private var dropboxAuthManager: DropboxAuthManager
     
     var body: some View {
         ScrollView {
             VStack(spacing: 32) {
-                // iCloud Section
+                #if os(macOS)
+                // CloudKit Section (Optional) - For syncing app data between devices
                 VStack(spacing: 16) {
                     HStack {
                         Image(systemName: "icloud")
                             .font(.title2)
-                        Text("iCloud")
+                        Text("CloudKit (Optional)")
                             .font(.title2)
                             .fontWeight(.semibold)
+                        Spacer()
+                        Text("For syncing app data")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                     
                     if !iCloudAvailable {
-                        Text("Sign in to your iCloud account to use this app.")
-                            .foregroundColor(.red)
-                            .font(.body)
-                            .multilineTextAlignment(.center)
-                        Button {
-                            openICloudSettings()
-                        } label: {
-                            Label("Open iCloud Settings", systemImage: "person.crop.circle.badge.exclamationmark")
-                                .font(.headline)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
+                        VStack(spacing: 8) {
+                            Text("CloudKit sync is disabled")
+                                .foregroundColor(.orange)
+                                .font(.body)
+                            Text("App will work normally without CloudKit. Enable CloudKit to sync app data between devices.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                            Button {
+                                openICloudSettings()
+                            } label: {
+                                Label("iCloud Settings", systemImage: "gear")
+                                    .font(.caption)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 4)
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        .buttonStyle(.borderedProminent)
                     } else {
-                        Text("✓ You are signed in to iCloud.")
-                            .foregroundColor(.green)
-                            .font(.body)
-                        Button {
-                            openICloudSettings()
-                        } label: {
-                            Label("iCloud Settings", systemImage: "gear")
-                                .font(.headline)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
+                        HStack {
+                            Text("✓ CloudKit sync enabled")
+                                .foregroundColor(.green)
+                                .font(.body)
+                            Spacer()
+                            Button {
+                                openICloudSettings()
+                            } label: {
+                                Label("Settings", systemImage: "gear")
+                                    .font(.caption)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 4)
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        .buttonStyle(.bordered)
                     }
                 }
                 .padding()
-                .background(Color.gray.opacity(0.1))
+                .background(Color.gray.opacity(0.05))
                 .cornerRadius(12)
+                
+                // Note about Photos access
+                VStack(spacing: 8) {
+                    HStack {
+                        Image(systemName: "photos")
+                            .foregroundColor(.blue)
+                        Text("iCloud Photos Access")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        Spacer()
+                    }
+                    VStack(spacing: 4) {
+                        Text("Accessing iCloud Photos requires:")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("• Photos permission (app will request)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("• iCloud Photos enabled in System Settings")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("• Photos synced locally to this device")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding()
+                .background(Color.blue.opacity(0.05))
+                .cornerRadius(12)
+                #endif
                 
                 // Dropbox Section
                 VStack(spacing: 16) {

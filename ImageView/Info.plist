@@ -23,6 +23,6 @@
 		<string>remote-notification</string>
 	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>This app accesses your photo library to display and organize your iCloud photos in albums.</string>
+	<string>This app accesses your photo library to display and organize your photos in albums.</string>
 </dict>
 </plist>
