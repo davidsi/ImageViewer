@@ -30,6 +30,7 @@ struct ImagesView: View {
     @State private var isGroupViewMode = false
     @State private var currentGroupImages: [String] = []
     @State private var invertResults = false
+    @State private var useOrMode = false // true for OR, false for AND
     
     private var filteredImages: [ImageMetadata] {
         var filtered = images
@@ -61,7 +62,7 @@ struct ImagesView: View {
                 }
             } else {
                 // Normal keyword filtering: Get all image filenames associated with selected keywords and their descendants
-                let associatedFilenames = getImageFilenamesForKeywords(selectedKeywords)
+                let associatedFilenames = getImageFilenamesForKeywords(selectedKeywords, useOrMode: useOrMode)
                 
                 filtered = filtered.filter { image in
                     let hasKeyword = associatedFilenames.contains(image.filename)
@@ -140,6 +141,7 @@ struct ImagesView: View {
                 selectedKeywords: $selectedKeywords,
                 searchText: $searchText,
                 invertResults: $invertResults,
+                useOrMode: $useOrMode,
                 filteredImages: filteredImages,
                 isLoading: isLoading,
                 errorMessage: errorMessage,
@@ -196,6 +198,7 @@ struct ImagesView: View {
                     selectedKeywords: $selectedKeywords,
                     searchText: $searchText,
                     invertResults: $invertResults,
+                    useOrMode: $useOrMode,
                     filteredImages: filteredImages,
                     isLoading: isLoading,
                     errorMessage: errorMessage,
@@ -605,39 +608,66 @@ struct ImagesView: View {
         return descendants
     }
     
-    private func getImageFilenamesForKeywords(_ selectedKeywords: [String]) -> Set<String> {
+    private func getImageFilenamesForKeywords(_ selectedKeywords: [String], useOrMode: Bool) -> Set<String> {
         guard let keywordTree = dropboxService.cachedKeywordTree else { return [] }
         guard !selectedKeywords.isEmpty else { return [] }
         
-        // Start with filenames from the first keyword (including descendants)
-        var resultFilenames: Set<String>? = nil
-        
-        for keyword in selectedKeywords {
-            var keywordFilenames = Set<String>()
+        if useOrMode {
+            // OR logic: Union all filenames from all keywords
+            var allFilenames = Set<String>()
             
-            // Get filenames for the selected keyword itself
-            if let filenames = getImageFilenamesForKeyword(keyword, in: keywordTree) {
-                keywordFilenames.formUnion(filenames)
+            for keyword in selectedKeywords {
+                var keywordFilenames = Set<String>()
+                
+                // Get filenames for the selected keyword itself
+                if let filenames = getImageFilenamesForKeyword(keyword, in: keywordTree) {
+                    keywordFilenames.formUnion(filenames)
+                }
+                
+                // Get filenames for all descendant keywords
+                let descendants = getDescendantKeywords(keyword)
+                for descendant in descendants {
+                    if let filenames = getImageFilenamesForKeyword(descendant, in: keywordTree) {
+                        keywordFilenames.formUnion(filenames)
+                    }
+                }
+                
+                // Add all filenames from this keyword to the overall result set
+                allFilenames.formUnion(keywordFilenames)
             }
             
-            // Get filenames for all descendant keywords
-            let descendants = getDescendantKeywords(keyword)
-            for descendant in descendants {
-                if let filenames = getImageFilenamesForKeyword(descendant, in: keywordTree) {
+            return allFilenames
+        } else {
+            // AND logic: Intersect filenames from all keywords (original behavior)
+            var resultFilenames: Set<String>? = nil
+            
+            for keyword in selectedKeywords {
+                var keywordFilenames = Set<String>()
+                
+                // Get filenames for the selected keyword itself
+                if let filenames = getImageFilenamesForKeyword(keyword, in: keywordTree) {
                     keywordFilenames.formUnion(filenames)
+                }
+                
+                // Get filenames for all descendant keywords
+                let descendants = getDescendantKeywords(keyword)
+                for descendant in descendants {
+                    if let filenames = getImageFilenamesForKeyword(descendant, in: keywordTree) {
+                        keywordFilenames.formUnion(filenames)
+                    }
+                }
+                
+                // For the first keyword, initialize the result set
+                if resultFilenames == nil {
+                    resultFilenames = keywordFilenames
+                } else {
+                    // For subsequent keywords, intersect with existing results (AND logic)
+                    resultFilenames = resultFilenames!.intersection(keywordFilenames)
                 }
             }
             
-            // For the first keyword, initialize the result set
-            if resultFilenames == nil {
-                resultFilenames = keywordFilenames
-            } else {
-                // For subsequent keywords, intersect with existing results (AND logic)
-                resultFilenames = resultFilenames!.intersection(keywordFilenames)
-            }
+            return resultFilenames ?? []
         }
-        
-        return resultFilenames ?? []
     }
     
     private func getImageFilenamesForKeyword(_ keyword: String, in keywordTree: KeywordTree) -> [String]? {
@@ -1086,6 +1116,7 @@ struct KeywordsSidebarView: View {
     @Binding var selectedKeywords: [String]
     @Binding var searchText: String
     @Binding var invertResults: Bool
+    @Binding var useOrMode: Bool
     let isSelectionMode: Bool
     let selectedImages: Set<String>
     let filteredImages: [ImageMetadata]
@@ -1128,46 +1159,74 @@ struct KeywordsSidebarView: View {
             }
             .padding(.horizontal)
             
-            // Zero keywords filter button
-            HStack {
-                Button(action: {
-                    if selectedKeywords.contains("__NO_KEYWORDS__") {
-                        selectedKeywords.removeAll { $0 == "__NO_KEYWORDS__" }
-                    } else {
-                        selectedKeywords.removeAll()
-                        selectedKeywords.append("__NO_KEYWORDS__")
-                    }
-                }) {
-                    HStack {
-                        Image(systemName: selectedKeywords.contains("__NO_KEYWORDS__") ? "tag.slash.fill" : "tag.slash")
-                            .foregroundColor(selectedKeywords.contains("__NO_KEYWORDS__") ? .white : .orange)
-                        Text("Images with Zero Keywords")
-                            .foregroundColor(selectedKeywords.contains("__NO_KEYWORDS__") ? .white : .orange)
-                            .font(.caption)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(selectedKeywords.contains("__NO_KEYWORDS__") ? Color.orange : Color.orange.opacity(0.1))
-                    .cornerRadius(8)
-                }
-                .buttonStyle(PlainButtonStyle())
-                Spacer()
-            }
-            .padding(.horizontal)
-            
             // Keywords section
             VStack(alignment: .leading, spacing: 8) {
+                // Keywords header
                 HStack {
                     Text("Keywords")
                         .font(.headline)
                     Spacer()
+                }
+                .padding(.horizontal)
+                
+                // Keyword controls - arranged vertically
+                VStack(alignment: .leading, spacing: 8) {
+                    // Zero keywords filter button
+                    Button(action: {
+                        if selectedKeywords.contains("__NO_KEYWORDS__") {
+                            selectedKeywords.removeAll { $0 == "__NO_KEYWORDS__" }
+                        } else {
+                            selectedKeywords.removeAll()
+                            selectedKeywords.append("__NO_KEYWORDS__")
+                        }
+                    }) {
+                        HStack {
+                            Image(systemName: selectedKeywords.contains("__NO_KEYWORDS__") ? "tag.slash.fill" : "tag.slash")
+                                .foregroundColor(selectedKeywords.contains("__NO_KEYWORDS__") ? .white : .orange)
+                            Text("Images with Zero Keywords")
+                                .foregroundColor(selectedKeywords.contains("__NO_KEYWORDS__") ? .white : .orange)
+                                .font(.caption)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(selectedKeywords.contains("__NO_KEYWORDS__") ? Color.orange : Color.orange.opacity(0.1))
+                        .cornerRadius(8)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    
+                    // OR/AND Mode Toggle
+                    if !selectedKeywords.isEmpty && selectedKeywords.count > 1 && !selectedKeywords.contains("__NO_KEYWORDS__") && !isSelectionMode {
+                        HStack {
+                            Text("Filter Mode:")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            HStack(spacing: 4) {
+                                Text("AND")
+                                    .font(.caption)
+                                    .foregroundColor(useOrMode ? .secondary : .primary)
+                                Toggle("", isOn: $useOrMode)
+                                    .labelsHidden()
+                                    .scaleEffect(0.8)
+                                Text("OR")
+                                    .font(.caption)
+                                    .foregroundColor(useOrMode ? .primary : .secondary)
+                            }
+                            Spacer()
+                        }
+                    }
+                    
+                    // Clear button
                     if !selectedKeywords.isEmpty && !isSelectionMode {
-                        Button("Clear") {
+                        Button("Clear All Keywords") {
                             selectedKeywords.removeAll()
                             invertResults = false // Reset invert when clearing
                         }
                         .font(.caption)
+                        .foregroundColor(.blue)
                     }
+                    
+                    // Show Inverse button
                     if keywordTree != nil && !isSelectionMode {
                         Button(invertResults ? "Show Match" : "Show Inverse") {
                             invertResults.toggle()
@@ -1176,8 +1235,10 @@ struct KeywordsSidebarView: View {
                         .foregroundColor(invertResults ? .orange : .blue)
                         .disabled(selectedKeywords.isEmpty)
                     }
+                    
+                    // Selection count display
                     if isSelectionMode && !selectedImages.isEmpty {
-                        Text("\(selectedImages.count) images")
+                        Text("\(selectedImages.count) images selected")
                             .font(.caption)
                             .foregroundColor(.blue)
                     }
@@ -1716,6 +1777,7 @@ struct ResizableSidebarView: View {
     @Binding var selectedKeywords: [String]
     @Binding var searchText: String
     @Binding var invertResults: Bool
+    @Binding var useOrMode: Bool
     let filteredImages: [ImageMetadata]
     let isLoading: Bool
     let errorMessage: String?
@@ -1736,7 +1798,7 @@ struct ResizableSidebarView: View {
         GeometryReader { geometry in
             HStack(spacing: 0) {
                 // Keywords Sidebar
-                KeywordsSidebarView( keywordTree: keywordTree, selectedKeywords: $selectedKeywords, searchText: $searchText, invertResults: $invertResults, isSelectionMode: isSelectionMode, selectedImages: selectedImages,
+                KeywordsSidebarView( keywordTree: keywordTree, selectedKeywords: $selectedKeywords, searchText: $searchText, invertResults: $invertResults, useOrMode: $useOrMode, isSelectionMode: isSelectionMode, selectedImages: selectedImages,
                                      filteredImages: filteredImages, onKeywordToggle: onKeywordToggle )
                 .frame(width: sidebarWidth)
                 .frame(maxHeight: .infinity)

@@ -27,22 +27,24 @@ struct iCloudPhotosView: View {
     var body: some View {
         Group {
 #if os(macOS)
-            HSplitView {
-                // Left side: Albums list
-                albumsListView
-                    .frame(minWidth: calculateOptimalAlbumsWidth(), idealWidth: calculateOptimalAlbumsWidth())
-                
-                // Right side: Photos in selected album  
-                Group {
-                    if let selectedAlbum = selectedAlbum {
-                        AlbumPhotosView(album: selectedAlbum)
-                    } else {
-                        Text("Select an album to view photos")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            GeometryReader { geometry in
+                HSplitView {
+                    // Left side: Albums list
+                    albumsListView
+                        .frame(minWidth: 200, idealWidth: geometry.size.width * 0.25, maxWidth: 400)
+                    
+                    // Right side: Photos in selected album  
+                    Group {
+                        if let selectedAlbum = selectedAlbum {
+                            AlbumPhotosView(album: selectedAlbum)
+                        } else {
+                            Text("Select an album to view photos")
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
                     }
+                    .frame(minWidth: 400)
                 }
-                .frame(minWidth: 400)
             }
 #else
             NavigationSplitView {
@@ -164,28 +166,6 @@ struct iCloudPhotosView: View {
                 Text("Unknown authorization status")
             }
         }
-    }
-    
-    private func calculateOptimalAlbumsWidth() -> CGFloat {
-        guard !albums.isEmpty else { return 250 }
-        
-#if os(macOS)
-        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
-        let maxWidth = albums.compactMap { album -> CGFloat? in
-            guard let title = album.localizedTitle else { return nil }
-            let attributes = [NSAttributedString.Key.font: font]
-            let size = (title as NSString).size(withAttributes: attributes)
-            return size.width
-        }.max() ?? 200
-        
-        // Add padding for the thumbnail (60 + spacing), text padding, and some extra margin
-        let totalWidth = maxWidth + 60 + 32 + 40  // thumbnail + spacing + padding + margin
-        
-        // Clamp between reasonable bounds
-        return min(max(totalWidth, 200), 400)
-#else
-        return 250
-#endif
     }
     
     private func requestPhotoAccess() {
