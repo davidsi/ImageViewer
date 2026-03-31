@@ -419,6 +419,8 @@ struct ImagesView: View {
             // Load available keywords
             do {
                 print("📱 Images: Attempting to fetch keywords...")
+                // Clear cached keyword tree to force refresh from Dropbox
+                dropboxService.invalidateKeywordCache()
                 let fetchedKeywordTree = try await dropboxService.fetchKeywords()
                 print("📱 Images: Successfully fetched keywords tree with \(fetchedKeywordTree.children.count) root nodes")
                 await MainActor.run {
