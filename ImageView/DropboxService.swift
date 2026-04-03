@@ -582,6 +582,39 @@ class DropboxService: ObservableObject {
         }
     }
     
+    // MARK: - Image Deletion
+    
+    func deleteImages(filenames: [String]) async throws {
+        try await executeWithTokenRefresh {
+            guard let client = DropboxClientsManager.authorizedClient else {
+                throw DropboxError.notAuthenticated
+            }
+            
+            print("🗑️ Dropbox: Deleting \(filenames.count) images: \(filenames)")
+            
+            for filename in filenames {
+                let dropboxPath = self.dropboxPath(self.inspirationFolder, filename)
+                print("🗑️ Dropbox: Deleting \(filename) at path: \(dropboxPath)")
+                
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    client.files.deleteV2(path: dropboxPath).response { result, error in
+                        if let result = result {
+                            print("🗑️ Dropbox: Successfully deleted \(filename)")
+                            continuation.resume()
+                        } else if let error = error {
+                            print("🗑️ Dropbox: Error deleting \(filename): \(error)")
+                            continuation.resume(throwing: DropboxError.apiError(error.description))
+                        } else {
+                            continuation.resume(throwing: DropboxError.unknown)
+                        }
+                    }
+                }
+            }
+            
+            print("🗑️ Dropbox: All image deletions completed")
+        }
+    }
+    
     // MARK: - Keyword-Image Association Management
     
     func addImageToKeyword(filename: String, keywordPath: [String]) async throws {

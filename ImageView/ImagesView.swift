@@ -1471,6 +1471,8 @@ struct ImagesMainView: View {
     let onExitGroupViewMode: () -> Void
     let onEnterGroupViewMode: (String) -> Void
     
+    @State private var showDeleteConfirmation = false
+    
     private var gridColumns: [GridItem] {
 #if os(macOS)
         [GridItem(.adaptive(minimum: imageWidth, maximum: imageWidth), spacing: 16)]
@@ -1620,6 +1622,15 @@ struct ImagesMainView: View {
                             .font(.body)
                     }
                     .disabled(!dropboxService.areImagesInGroups(filteredImages.filter { selectedImages.contains($0.dropboxPath) }.map { $0.filename }))
+                    
+                    // Delete button next to Ungroup button
+                    Button(action: {
+                        showDeleteConfirmation = true
+                    }) {
+                        Text("Delete")
+                            .foregroundColor(.red)
+                            .font(.body)
+                    }
                 }
                 
                 Spacer()
@@ -1753,6 +1764,23 @@ struct ImagesMainView: View {
             .padding()
             .background(Color.yellow.opacity(0.2)) // Make it visible for debugging
         }
+        .alert("Delete Images", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Confirm", role: .destructive) {
+                Task {
+                    await deleteSelectedImages()
+                }
+            }
+        } message: {
+            let selectedMetadata = filteredImages.filter { selectedImages.contains($0.dropboxPath) }
+            let fileNames = selectedMetadata.map { $0.filename }.joined(separator: "\n")
+            
+            if selectedMetadata.count == 1 {
+                Text("Are you sure you want to delete this file?\n\n\(fileNames)\n\nThis action cannot be undone and the file will be permanently removed from Dropbox.")
+            } else {
+                Text("Are you sure you want to delete these \(selectedMetadata.count) files?\n\n\(fileNames)\n\nThis action cannot be undone and the files will be permanently removed from Dropbox.")
+            }
+        }
     }
     
     private func collectAllKeywords(from nodes: [KeywordTreeNode], parentPath: String = "") -> [String] {
@@ -1767,6 +1795,31 @@ struct ImagesMainView: View {
         }
         
         return keywords
+    }
+    
+    private func deleteSelectedImages() async {
+        let selectedMetadata = filteredImages.filter { selectedImages.contains($0.dropboxPath) }
+        let selectedFilenames = selectedMetadata.map { $0.filename }
+        
+        print("🗑️ Attempting to delete \(selectedFilenames.count) images: \(selectedFilenames)")
+        
+        do {
+            try await dropboxService.deleteImages(filenames: selectedFilenames)
+            print("🗑️ Successfully deleted images from Dropbox")
+            
+            // Exit selection mode and clear selected images
+            await MainActor.run {
+                isSelectionMode = false
+                selectedImages.removeAll()
+            }
+            
+            // Reload images to update the view
+            loadImagesAction()
+            
+        } catch {
+            print("❌ Failed to delete images: \(error)")
+            // Could show an error alert here if needed
+        }
     }
 }
 
