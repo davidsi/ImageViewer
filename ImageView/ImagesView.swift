@@ -9,6 +9,9 @@ import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #endif
+#if canImport(AppKit)
+import AppKit
+#endif
 
 struct ImagesView: View {
     @Environment(\.modelContext) private var modelContext
@@ -1472,6 +1475,8 @@ struct ImagesMainView: View {
     let onEnterGroupViewMode: (String) -> Void
     
     @State private var showDeleteConfirmation = false
+    @State private var isMergeMode = false
+    @State private var firstMergeImage: String? = nil
     
     private var gridColumns: [GridItem] {
 #if os(macOS)
@@ -1631,6 +1636,22 @@ struct ImagesMainView: View {
                             .foregroundColor(.red)
                             .font(.body)
                     }
+                    
+                    // Merge with button - only show when exactly one image is selected
+                    if selectedImages.count == 1 {
+                        Button(action: {
+                            // Enter merge mode with the selected image as the first image
+                            let selectedImage = Array(selectedImages).first!
+                            firstMergeImage = selectedImage
+                            isMergeMode = true
+                            // Clear current selection to allow selecting the second image
+                            selectedImages.removeAll()
+                        }) {
+                            Text("Merge With")
+                                .foregroundColor(.indigo)
+                                .font(.body)
+                        }
+                    }
                 }
                 
                 Spacer()
@@ -1639,6 +1660,19 @@ struct ImagesMainView: View {
                     Text("\(selectedImages.count) selected")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                } else if isMergeMode {
+                    HStack {
+                        Text("Select second image to merge with")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                        
+                        Button("Cancel") {
+                            isMergeMode = false
+                            firstMergeImage = nil
+                        }
+                        .foregroundColor(.red)
+                        .font(.caption)
+                    }
                 }
             }
             .padding(.horizontal)
@@ -1711,14 +1745,27 @@ struct ImagesMainView: View {
                             ForEach(filteredImages) { metadata in
                                 ImageTileView(
                                     metadata: metadata,
-                                    isSelectionMode: isSelectionMode,
+                                    isSelectionMode: isSelectionMode || isMergeMode,
                                     isSelected: selectedImages.contains(metadata.dropboxPath),
                                     showKeywordsOnHover: showKeywordsOnHover,
                                     onSelectionToggle: {
-                                        if selectedImages.contains(metadata.dropboxPath) {
-                                            selectedImages.remove(metadata.dropboxPath)
+                                        if isMergeMode {
+                                            // Handle second image selection for merge
+                                            if let firstImagePath = firstMergeImage {
+                                                Task {
+                                                    await performImageMerge(firstImage: firstImagePath, secondImage: metadata.dropboxPath)
+                                                }
+                                                // Exit merge mode
+                                                isMergeMode = false
+                                                firstMergeImage = nil
+                                            }
                                         } else {
-                                            selectedImages.insert(metadata.dropboxPath)
+                                            // Normal selection mode
+                                            if selectedImages.contains(metadata.dropboxPath) {
+                                                selectedImages.remove(metadata.dropboxPath)
+                                            } else {
+                                                selectedImages.insert(metadata.dropboxPath)
+                                            }
                                         }
                                     },
                                     dropboxService: dropboxService,
@@ -1821,6 +1868,135 @@ struct ImagesMainView: View {
             // Could show an error alert here if needed
         }
     }
+    
+    private func performImageMerge(firstImage: String, secondImage: String) async {
+        print("🔗 Starting image merge: \(firstImage) + \(secondImage)")
+        
+        do {
+            // Download both images
+            guard let firstImageData = try await dropboxService.downloadImageData(path: firstImage),
+                  let secondImageData = try await dropboxService.downloadImageData(path: secondImage) else {
+                print("❌ Failed to download one or both images")
+                return
+            }
+            
+#if os(macOS)
+            guard let firstNSImage = NSImage(data: firstImageData),
+                  let secondNSImage = NSImage(data: secondImageData) else {
+                print("❌ Failed to create NSImages from data")
+                return
+            }
+            
+            let mergedImage = mergeImages(first: firstNSImage, second: secondNSImage)
+            guard let mergedImageData = mergedImage.pngData() else {
+                print("❌ Failed to convert merged image to PNG data")
+                return
+            }
+#else
+            guard let firstUIImage = UIImage(data: firstImageData),
+                  let secondUIImage = UIImage(data: secondImageData) else {
+                print("❌ Failed to create UIImages from data")
+                return
+            }
+            
+            let mergedImage = mergeImages(first: firstUIImage, second: secondUIImage)
+            guard let mergedImageData = mergedImage.pngData() else {
+                print("❌ Failed to convert merged image to PNG data")
+                return
+            }
+#endif
+            
+            // Generate filename for merged image
+            let firstFilename = URL(fileURLWithPath: firstImage).lastPathComponent
+            let secondFilename = URL(fileURLWithPath: secondImage).lastPathComponent
+            let mergedFilename = "merged_\(firstFilename)_\(secondFilename).png"
+            
+            // Upload merged image to Dropbox
+            _ = try await dropboxService.uploadImage(imageData: mergedImageData, filename: mergedFilename, title: "Merged: \(firstFilename) + \(secondFilename)")
+            
+            print("✅ Successfully created and uploaded merged image: \(mergedFilename)")
+            
+            // Refresh the images list to show the new merged image
+            await MainActor.run {
+                loadImagesAction()
+            }
+            
+        } catch {
+            print("❌ Failed to merge images: \(error)")
+        }
+    }
+    
+#if os(macOS)
+    private func mergeImages(first: NSImage, second: NSImage) -> NSImage {
+        let firstSize = first.size
+        let secondSize = second.size
+        
+        // Calculate dimensions for merged image
+        let maxHeight = max(firstSize.height, secondSize.height)
+        let verticalBarWidth: CGFloat = 5
+        let mergedWidth = firstSize.width + secondSize.width + verticalBarWidth
+        
+        // Create the merged image
+        let mergedImage = NSImage(size: NSSize(width: mergedWidth, height: maxHeight))
+        mergedImage.lockFocus()
+        
+        // Fill background with white
+        NSColor.white.setFill()
+        NSRect(x: 0, y: 0, width: mergedWidth, height: maxHeight).fill()
+        
+        // Draw first image (left side)
+        let firstRect = NSRect(x: 0, y: (maxHeight - firstSize.height) / 2, width: firstSize.width, height: firstSize.height)
+        first.draw(in: firstRect)
+        
+        // Draw vertical bar
+        NSColor.gray.setFill()
+        let barRect = NSRect(x: firstSize.width, y: 0, width: verticalBarWidth, height: maxHeight)
+        barRect.fill()
+        
+        // Draw second image (right side)
+        let secondRect = NSRect(x: firstSize.width + verticalBarWidth, y: (maxHeight - secondSize.height) / 2, width: secondSize.width, height: secondSize.height)
+        second.draw(in: secondRect)
+        
+        mergedImage.unlockFocus()
+        return mergedImage
+    }
+#else
+    private func mergeImages(first: UIImage, second: UIImage) -> UIImage {
+        let firstSize = first.size
+        let secondSize = second.size
+        
+        // Calculate dimensions for merged image
+        let maxHeight = max(firstSize.height, secondSize.height)
+        let verticalBarWidth: CGFloat = 5
+        let mergedWidth = firstSize.width + secondSize.width + verticalBarWidth
+        
+        let mergedSize = CGSize(width: mergedWidth, height: maxHeight)
+        
+        UIGraphicsBeginImageContextWithOptions(mergedSize, true, 0)
+        
+        // Fill background with white
+        UIColor.white.setFill()
+        UIRectFill(CGRect(origin: .zero, size: mergedSize))
+        
+        // Draw first image (left side)
+        let firstRect = CGRect(x: 0, y: (maxHeight - firstSize.height) / 2, width: firstSize.width, height: firstSize.height)
+        first.draw(in: firstRect)
+        
+        // Draw vertical bar
+        UIColor.gray.setFill()
+        let barRect = CGRect(x: firstSize.width, y: 0, width: verticalBarWidth, height: maxHeight)
+        UIRectFill(barRect)
+        
+        // Draw second image (right side)
+        let secondRect = CGRect(x: firstSize.width + verticalBarWidth, y: (maxHeight - secondSize.height) / 2, width: secondSize.width, height: secondSize.height)
+        second.draw(in: secondRect)
+        
+        let mergedImage = UIGraphicsGetImageFromCurrentImageContext() ?? UIImage()
+        UIGraphicsEndImageContext()
+        
+        return mergedImage
+    }
+#endif
 }
 
 // MARK: - Resizable Sidebar Layout
@@ -1908,13 +2084,15 @@ struct DraggableDivider: View {
 #endif
             }
             .gesture(
-                DragGesture()
-                    .onChanged { value in
+                DragGesture(coordinateSpace: .local)
+                    .onChanged { (value: DragGesture.Value) in
                         isDragging = true
-                        let newWidth = sidebarWidth + value.translation.width
-                        let minWidth: CGFloat = 120
-                        let maxWidth: CGFloat = max(minWidth + 50, totalWidth - 300)
-                        sidebarWidth = max(minWidth, min(newWidth, maxWidth))
+                        let translation: CGSize = value.translation
+                        let newWidth = sidebarWidth + translation.width
+                        let minWidth: CGFloat = 150
+                        let maxWidth = totalWidth * 0.7
+                        
+                        sidebarWidth = max(min(newWidth, maxWidth), minWidth)
                     }
                     .onEnded { _ in
                         isDragging = false
@@ -1922,3 +2100,16 @@ struct DraggableDivider: View {
             )
     }
 }
+
+#if os(macOS)
+// Extension to provide pngData() method for NSImage
+extension NSImage {
+    func pngData() -> Data? {
+        guard let tiffData = self.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData) else {
+            return nil
+        }
+        return bitmap.representation(using: .png, properties: [:])
+    }
+}
+#endif

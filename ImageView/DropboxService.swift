@@ -582,6 +582,31 @@ class DropboxService: ObservableObject {
         }
     }
     
+    func downloadImageData(path: String) async throws -> Data? {
+        return try await executeWithTokenRefresh {
+            guard let client = DropboxClientsManager.authorizedClient else {
+                throw DropboxError.notAuthenticated
+            }
+            
+            print("📥 Dropbox: Downloading image data for path: '\(path)'")
+            
+            return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data?, Error>) in
+                client.files.download(path: path)
+                    .response { result, error in
+                        if let result = result {
+                            print("📥 Dropbox: Successfully downloaded image data for \(path)")
+                            continuation.resume(returning: result.1)
+                        } else if let error = error {
+                            print("📥 Dropbox: Error downloading image data for \(path): \(error)")
+                            continuation.resume(throwing: DropboxError.downloadFailed(error.description))
+                        } else {
+                            continuation.resume(throwing: DropboxError.unknown)
+                        }
+                    }
+            }
+        }
+    }
+    
     // MARK: - Image Deletion
     
     func deleteImages(filenames: [String]) async throws {
