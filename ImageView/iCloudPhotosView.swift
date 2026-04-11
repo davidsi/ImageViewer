@@ -413,7 +413,9 @@ struct AlbumPhotosView: View {
                         // Delete after import checkbox
                         HStack(spacing: 6) {
                             Toggle("Delete after import", isOn: $deleteAfterImport)
+#if os(macOS)
                                 .toggleStyle(.checkbox)
+#endif
                             Text("Delete from iCloud Photos after import")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
