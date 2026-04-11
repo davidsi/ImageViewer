@@ -2049,7 +2049,7 @@ struct ResizableSidebarView: View {
                     isSelectionMode: $isSelectionMode,
                     selectedImages: $selectedImages,
                     showKeywordsOnHover: $showKeywordsOnHover,
-                    invertResults: .constant(false),
+                    invertResults: $invertResults,
                     loadImagesAction: loadImagesAction,
                     onImageWidthChanged: onImageWidthChanged,
                     onCollectCheckedKeywords: onCollectCheckedKeywords,
