@@ -171,11 +171,11 @@ struct iCloudPhotosView: View {
     private func requestPhotoAccess() {
         print("Requesting photo access...")
         
-        // Define authorization level based on platform
+        // Define authorization level - request readWrite to allow deletion
 #if os(iOS)
         let authLevel: PHAccessLevel = .readWrite
 #else
-        let authLevel: PHAccessLevel = .addOnly
+        let authLevel: PHAccessLevel = .readWrite  // Changed from .addOnly to support deletion
 #endif
         
         let currentStatus = PHPhotoLibrary.authorizationStatus(for: authLevel)
@@ -369,6 +369,7 @@ struct AlbumPhotosView: View {
     @State private var hasLoaded = false
     @State private var importingCount = 0
     @State private var importProgress: Float = 0.0
+    @State private var deleteAfterImport = false
     
     private let columns = [
         GridItem(.adaptive(minimum: 150))
@@ -408,6 +409,16 @@ struct AlbumPhotosView: View {
                         .buttonStyle(.bordered)
                         
                         Spacer()
+                        
+                        // Delete after import checkbox
+                        HStack(spacing: 6) {
+                            Toggle("Delete after import", isOn: $deleteAfterImport)
+                                .toggleStyle(.checkbox)
+                            Text("Delete from iCloud Photos after import")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .help("Remove photos from iCloud Photos album after successful import to Dropbox")
                         
                         if importingCount > 0 {
                             HStack {
@@ -489,6 +500,7 @@ struct AlbumPhotosView: View {
         }
         
         var successCount = 0
+        var successfullyImportedAssets: [PHAsset] = []
         let totalCount = selectedPhotos.count
         
         for (index, asset) in selectedPhotos.enumerated() {
@@ -505,6 +517,7 @@ struct AlbumPhotosView: View {
                 )
                 
                 successCount += 1
+                successfullyImportedAssets.append(asset)
                 print("Successfully imported photo \(index + 1)/\(totalCount): \(filename)")
                 
             } catch {
@@ -516,15 +529,52 @@ struct AlbumPhotosView: View {
             }
         }
         
+        // Delete successfully imported photos from iCloud Photos if checkbox is enabled
+        if deleteAfterImport && !successfullyImportedAssets.isEmpty {
+            await deletePhotosFromICloud(successfullyImportedAssets)
+        }
+        
         await MainActor.run {
             importingCount = 0
             selectedAssets.removeAll()
         }
         
         print("Import completed: \(successCount)/\(totalCount) photos successfully imported")
+        if deleteAfterImport {
+            print("Deleted \(successfullyImportedAssets.count) photos from iCloud Photos")
+        }
         
         // Refresh the images view if it exists
         NotificationCenter.default.post(name: .imagesDidUpdate, object: nil)
+        
+        // Refresh the current album view to reflect deleted photos
+        if deleteAfterImport && !successfullyImportedAssets.isEmpty {
+            await MainActor.run {
+                // Remove deleted assets from the current view
+                let deletedIdentifiers = Set(successfullyImportedAssets.map { $0.localIdentifier })
+                assets.removeAll { deletedIdentifiers.contains($0.localIdentifier) }
+            }
+        }
+    }
+    
+    private func deletePhotosFromICloud(_ assets: [PHAsset]) async {
+        print("Attempting to delete \\(assets.count) photos from iCloud Photos...")
+        
+        do {
+            try await PHPhotoLibrary.shared().performChanges {
+                // Create the delete request inside the performChanges block
+                PHAssetChangeRequest.deleteAssets(assets as NSArray)
+            }
+            print("Successfully deleted \\(assets.count) photos from iCloud Photos")
+        } catch {
+            print("Failed to delete photos from iCloud Photos: \\(error)")
+            
+            // Show an alert to the user about the deletion failure
+            await MainActor.run {
+                // Note: In a real app, you might want to show a proper alert dialog
+                print("Error: Could not delete photos from iCloud Photos. They may be protected or the app may not have sufficient permissions.")
+            }
+        }
     }
     
     private func getImageData(from asset: PHAsset) async throws -> Data {
