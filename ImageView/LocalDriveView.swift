@@ -146,17 +146,17 @@ struct LocalDriveView: View {
             .background(Color.blue.opacity(0.05))
         }
         .navigationTitle("Local Drive Import")
-        .onChange(of: selectedFolderURL) { _ in
-            print("Folder selection changed: \(selectedFolderURL?.path() ?? "nil")")
-            if selectedFolderURL != nil {
+        .onChange(of: selectedFolderURL) { oldValue, newValue in
+            print("🗂️ LocalDrive: Folder selection changed from \(oldValue?.path() ?? "nil") to \(newValue?.path() ?? "nil")")
+            if newValue != nil {
                 loadImagesFromFolder()
             } else {
                 imageFiles.removeAll()
                 selectedImages.removeAll()
             }
         }
-        .onChange(of: imageFiles) { _ in
-            print("imageFiles array updated with \(imageFiles.count) images")
+        .onChange(of: imageFiles) { oldValue, newValue in
+            print("🗂️ LocalDrive: imageFiles array updated from \(oldValue.count) to \(newValue.count) images")
         }
     }
     
@@ -167,20 +167,27 @@ struct LocalDriveView: View {
         panel.canChooseFiles = false
         panel.canCreateDirectories = false
         
-        print("Opening folder selection panel...")
+        print("🗂️ LocalDrive: Opening folder selection panel...")
         if panel.runModal() == .OK {
-            print("User selected folder: \(panel.url?.path() ?? "nil")")
+            print("🗂️ LocalDrive: User selected folder: \(panel.url?.path() ?? "nil")")
             selectedFolderURL = panel.url
             selectedImages.removeAll()
+            // Explicitly call loadImagesFromFolder to ensure it runs
+            if selectedFolderURL != nil {
+                loadImagesFromFolder()
+            }
         } else {
-            print("Folder selection was cancelled")
+            print("🗂️ LocalDrive: Folder selection was cancelled")
         }
     }
     
     private func loadImagesFromFolder() {
-        guard let folderURL = selectedFolderURL else { return }
+        guard let folderURL = selectedFolderURL else { 
+            print("🗂️ LocalDrive: No folder selected, returning")
+            return 
+        }
         
-        print("Loading images from folder: \(folderURL.path())")
+        print("🗂️ LocalDrive: Starting to load images from folder: \(folderURL.path())")
         isLoading = true
         imageFiles.removeAll()
         
@@ -189,36 +196,40 @@ struct LocalDriveView: View {
                 let fileManager = FileManager.default
                 let contents = try fileManager.contentsOfDirectory(at: folderURL, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])
                 
-                print("Found \(contents.count) total files in folder")
+                print("🗂️ LocalDrive: Found \(contents.count) total files in folder")
                 
                 let imageURLs = contents.filter { url in
                     guard let isRegularFile = try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile,
                           isRegularFile else { 
-                        print("Skipping non-regular file: \(url.lastPathComponent)")
+                        print("🗂️ LocalDrive: Skipping non-regular file: \(url.lastPathComponent)")
                         return false 
                     }
                     
                     let pathExtension = url.pathExtension.lowercased()
                     let isImage = supportedImageTypes.contains(pathExtension)
                     if !isImage && !pathExtension.isEmpty {
-                        print("Skipping unsupported file type: \(url.lastPathComponent) (.\(pathExtension))")
+                        print("🗂️ LocalDrive: Skipping unsupported file type: \(url.lastPathComponent) (.\(pathExtension))")
                     }
                     return isImage
                 }.sorted { $0.lastPathComponent < $1.lastPathComponent }
                 
-                print("Found \(imageURLs.count) image files")
-                for imageURL in imageURLs {
-                    print("- \(imageURL.lastPathComponent)")
+                print("🗂️ LocalDrive: Found \(imageURLs.count) image files")
+                for (index, imageURL) in imageURLs.enumerated() {
+                    if index < 5 || imageURLs.count <= 10 {
+                        print("🗂️ LocalDrive: - \(imageURL.lastPathComponent)")
+                    } else if index == 5 {
+                        print("🗂️ LocalDrive: ... and \(imageURLs.count - 5) more files")
+                        break
+                    }
                 }
                 
                 await MainActor.run {
                     imageFiles = imageURLs
                     isLoading = false
-                    print("Updated imageFiles array with \(imageFiles.count) images")
-                    print("Current UI state - isLoading: \(isLoading), imageFiles.count: \(imageFiles.count)")
+                    print("🗂️ LocalDrive: Successfully loaded \(imageURLs.count) images into UI")
                 }
             } catch {
-                print("Error loading folder contents: \(error)")
+                print("🗂️ LocalDrive: Error loading folder contents: \(error)")
                 await MainActor.run {
                     isLoading = false
                 }
@@ -236,13 +247,18 @@ struct LocalDriveView: View {
     }
     
     private func copySelectedImages() {
-        guard !selectedImages.isEmpty else { return }
+        guard !selectedImages.isEmpty else { 
+            print("🗂️ LocalDrive: No images selected for copying")
+            return 
+        }
         
+        print("🗂️ LocalDrive: Starting copy operation for \(selectedImages.count) selected images")
         isCopying = true
         copyProgress = 0.0
         
         let selectedURLs = imageFiles.filter { selectedImages.contains($0.absoluteString) }
         let totalCount = selectedURLs.count
+        print("🗂️ LocalDrive: Found \(totalCount) URLs matching selected images")
         
         Task {
             for (index, imageURL) in selectedURLs.enumerated() {
@@ -250,12 +266,13 @@ struct LocalDriveView: View {
                     copyMessage = "Copying \(imageURL.lastPathComponent)..."
                     copyProgress = Double(index) / Double(totalCount)
                 }
+                print("🗂️ LocalDrive: Copying (\(index + 1)/\(totalCount)): \(imageURL.lastPathComponent)")
                 
                 do {
                     try await copyImageToDropbox(imageURL)
-                    print("Successfully copied: \(imageURL.lastPathComponent)")
+                    print("🗂️ LocalDrive: ✅ Successfully copied: \(imageURL.lastPathComponent)")
                 } catch {
-                    print("Failed to copy \(imageURL.lastPathComponent): \(error)")
+                    print("🗂️ LocalDrive: ❌ Failed to copy \(imageURL.lastPathComponent): \(error)")
                 }
             }
             
@@ -264,6 +281,7 @@ struct LocalDriveView: View {
                 copyMessage = "Copy completed!"
                 isCopying = false
                 selectedImages.removeAll()
+                print("🗂️ LocalDrive: Copy operation completed")
                 
                 // Clear the message after a delay
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
