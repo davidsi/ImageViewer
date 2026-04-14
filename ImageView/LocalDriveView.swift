@@ -19,6 +19,7 @@ struct LocalDriveView: View {
     @State private var isCopying = false
     @State private var copyMessage = ""
     @StateObject private var dropboxService = DropboxService.shared
+    @State private var showingFolderPicker = false
     
     private let supportedImageTypes: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "gif", "bmp", "tiff", "webp"]
     
@@ -31,7 +32,11 @@ struct LocalDriveView: View {
                     Text("Select Source Folder")
                         .font(.headline)
                     
-                    Button(action: selectFolder) {
+                    Button(action: { 
+                        print("🗂️ LocalDrive: Button pressed, setting showingFolderPicker = true")
+                        showingFolderPicker = true 
+                        print("🗂️ LocalDrive: showingFolderPicker is now: \(showingFolderPicker)")
+                    }) {
                         HStack {
                             Image(systemName: "folder")
                             Text(selectedFolderURL?.lastPathComponent ?? "Choose Folder…")
@@ -145,44 +150,37 @@ struct LocalDriveView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.blue.opacity(0.05))
         }
+        .onChange(of: showingFolderPicker) { oldValue, newValue in
+            print("🗂️ LocalDrive: showingFolderPicker changed from \(oldValue) to \(newValue)")
+        }
         .navigationTitle("Local Drive Import")
-        .onChange(of: selectedFolderURL) { oldValue, newValue in
-            print("🗂️ LocalDrive: Folder selection changed from \(oldValue?.path() ?? "nil") to \(newValue?.path() ?? "nil")")
-            if newValue != nil {
-                loadImagesFromFolder()
-            } else {
-                imageFiles.removeAll()
-                selectedImages.removeAll()
+        .fileImporter(
+            isPresented: $showingFolderPicker,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            print("🗂️ LocalDrive: fileImporter callback triggered")
+            Task { @MainActor in
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { 
+                        print("🗂️ LocalDrive: Error: No URL received")
+                        return 
+                    }
+                    let gotAccess = url.startAccessingSecurityScopedResource()
+                    print("🗂️ LocalDrive: User selected folder: \(url.path()) (access: \(gotAccess))")
+                    selectedFolderURL = url
+                    selectedImages.removeAll()
+                    loadImagesFromFolder(url: url)
+                case .failure(let error):
+                    print("🗂️ LocalDrive: Folder picker error: \(error)")
+                }
             }
-        }
-        .onChange(of: imageFiles) { oldValue, newValue in
-            print("🗂️ LocalDrive: imageFiles array updated from \(oldValue.count) to \(newValue.count) images")
         }
     }
     
-    private func selectFolder() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = false
-        
-        print("🗂️ LocalDrive: Opening folder selection panel...")
-        if panel.runModal() == .OK {
-            print("🗂️ LocalDrive: User selected folder: \(panel.url?.path() ?? "nil")")
-            selectedFolderURL = panel.url
-            selectedImages.removeAll()
-            // Explicitly call loadImagesFromFolder to ensure it runs
-            if selectedFolderURL != nil {
-                loadImagesFromFolder()
-            }
-        } else {
-            print("🗂️ LocalDrive: Folder selection was cancelled")
-        }
-    }
-    
-    private func loadImagesFromFolder() {
-        guard let folderURL = selectedFolderURL else { 
+    private func loadImagesFromFolder(url: URL? = nil) {
+        guard let folderURL = url ?? selectedFolderURL else { 
             print("🗂️ LocalDrive: No folder selected, returning")
             return 
         }
