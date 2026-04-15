@@ -1477,6 +1477,7 @@ struct ImagesMainView: View {
     @State private var showDeleteConfirmation = false
     @State private var isMergeMode = false
     @State private var firstMergeImage: String? = nil
+    @State private var isMerging = false
     
     private var gridColumns: [GridItem] {
 #if os(macOS)
@@ -1752,12 +1753,14 @@ struct ImagesMainView: View {
                                         if isMergeMode {
                                             // Handle second image selection for merge
                                             if let firstImagePath = firstMergeImage {
-                                                Task {
-                                                    await performImageMerge(firstImage: firstImagePath, secondImage: metadata.dropboxPath)
-                                                }
-                                                // Exit merge mode
+                                                let secondImagePath = metadata.dropboxPath
                                                 isMergeMode = false
                                                 firstMergeImage = nil
+                                                isMerging = true
+                                                Task { @MainActor in
+                                                    await performImageMerge(firstImage: firstImagePath, secondImage: secondImagePath)
+                                                    isMerging = false
+                                                }
                                             }
                                         } else {
                                             // Normal selection mode
@@ -1826,6 +1829,24 @@ struct ImagesMainView: View {
                 Text("Are you sure you want to delete this file?\n\n\(fileNames)\n\nThis action cannot be undone and the file will be permanently removed from Dropbox.")
             } else {
                 Text("Are you sure you want to delete these \(selectedMetadata.count) files?\n\n\(fileNames)\n\nThis action cannot be undone and the files will be permanently removed from Dropbox.")
+            }
+        }
+        .overlay {
+            if isMerging {
+                ZStack {
+                    Color.black.opacity(0.4)
+                        .ignoresSafeArea()
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .scaleEffect(1.5)
+                        Text("Merging images…")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                    }
+                    .padding(32)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                }
             }
         }
     }
