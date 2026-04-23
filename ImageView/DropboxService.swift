@@ -25,8 +25,118 @@ class DropboxService: ObservableObject {
     private var keywordTreeLoadTask: Task<KeywordTree, Error>?
     
     private init() {}
-    
-    /// Constructs a proper Dropbox path by joining components
+
+    // MARK: - Local Folder Mode helpers
+
+    var isLocalMode: Bool { userSettings.isLocalMode }
+
+    /// Access the security-scoped local folder URL, starting access if needed.
+    /// Callers must call `stopLocalFolderAccess()` when done.
+    private func localFolderURL() -> URL? {
+        guard let url = userSettings.localFolderURL else { return nil }
+        _ = url.startAccessingSecurityScopedResource()
+        return url
+    }
+
+    private func stopLocalFolderAccess() {
+        userSettings.localFolderURL?.stopAccessingSecurityScopedResource()
+    }
+
+    private var localKeywordsFileURL: URL? {
+        localFolderURL()?.appendingPathComponent(keywordsFileName)
+    }
+
+    private func localImageURL(filename: String) -> URL? {
+        localFolderURL()?.appendingPathComponent(filename)
+    }
+
+    // MARK: - Local fetchImageList
+    private func localFetchImageList() throws -> [ImageMetadata] {
+        guard let folder = localFolderURL() else { throw DropboxError.notAuthenticated }
+        defer { stopLocalFolderAccess() }
+        let supportedExtensions: Set<String> = ["jpg", "jpeg", "png", "gif", "bmp", "tiff", "webp", "heic", "heif"]
+        let fm = FileManager.default
+        let contents = try fm.contentsOfDirectory(at: folder,
+                                                   includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+                                                   options: .skipsHiddenFiles)
+        return contents.compactMap { url -> ImageMetadata? in
+            let ext = url.pathExtension.lowercased()
+            guard supportedExtensions.contains(ext) else { return nil }
+            let attrs = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            return ImageMetadata(
+                filename: url.lastPathComponent,
+                title: nil,
+                dropboxPath: url.path,
+                fileSize: Int64(attrs?.fileSize ?? 0),
+                lastModified: attrs?.contentModificationDate ?? Date.distantPast,
+                contentHash: nil,
+                keywords: nil
+            )
+        }
+        .sorted { $0.lastModified > $1.lastModified }
+    }
+
+    // MARK: - Local fetchKeywords
+    private func localFetchKeywords() throws -> KeywordTree {
+        guard let url = localKeywordsFileURL else { throw DropboxError.notAuthenticated }
+        defer { stopLocalFolderAccess() }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            // Return empty tree if no keywords file yet
+            return KeywordTree()
+        }
+        let data = try Data(contentsOf: url)
+        if let keywordData = try? JSONDecoder().decode(KeywordData.self, from: data) {
+            DispatchQueue.main.async { self.cachedGroups = keywordData.Groups }
+            return keywordData.Keywords
+        }
+        return try JSONDecoder().decode(KeywordTree.self, from: data)
+    }
+
+    // MARK: - Local saveKeywords
+    private func localSaveKeywords(_ keywordTree: KeywordTree) throws {
+        guard let url = localKeywordsFileURL else { throw DropboxError.notAuthenticated }
+        defer { stopLocalFolderAccess() }
+        let keywordData = KeywordData(keywordTree: keywordTree, groups: cachedGroups)
+        let data = try JSONEncoder().encode(keywordData)
+        try data.write(to: url, options: .atomic)
+    }
+
+    // MARK: - Local uploadImage
+    private func localUploadImage(imageData: Data, filename: String) throws -> String {
+        guard let folder = localFolderURL() else { throw DropboxError.notAuthenticated }
+        defer { stopLocalFolderAccess() }
+        let fm = FileManager.default
+        var finalFilename = filename
+        var counter = 1
+        let nameComponents = filename.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
+        let base = String(nameComponents.first ?? "")
+        let ext = nameComponents.count > 1 ? ".\(nameComponents[1])" : ""
+        while fm.fileExists(atPath: folder.appendingPathComponent(finalFilename).path) {
+            finalFilename = "\(base)-\(counter)\(ext)"
+            counter += 1
+        }
+        try imageData.write(to: folder.appendingPathComponent(finalFilename), options: .atomic)
+        return finalFilename
+    }
+
+    // MARK: - Local downloadImageData
+    private func localDownloadImageData(path: String) throws -> Data? {
+        // path is the full file path when in local mode
+        return try Data(contentsOf: URL(fileURLWithPath: path))
+    }
+
+    // MARK: - Local deleteImages
+    private func localDeleteImages(filenames: [String]) throws {
+        guard let folder = localFolderURL() else { throw DropboxError.notAuthenticated }
+        defer { stopLocalFolderAccess() }
+        let fm = FileManager.default
+        for filename in filenames {
+            let url = folder.appendingPathComponent(filename)
+            if fm.fileExists(atPath: url.path) {
+                try fm.removeItem(at: url)
+            }
+        }
+    }
     private func dropboxPath(_ components: String...) -> String {
         let nonEmptyComponents = components.filter { !$0.isEmpty }
         let joinedPath = nonEmptyComponents.joined(separator: "/")
@@ -42,6 +152,7 @@ class DropboxService: ObservableObject {
     // MARK: - Token Management
     
     func isAuthenticated() -> Bool {
+        if userSettings.isLocalMode { return userSettings.localFolderURL != nil }
         return DropboxClientsManager.authorizedClient != nil
     }
     
@@ -257,6 +368,7 @@ class DropboxService: ObservableObject {
     // MARK: - File Listing
     
     func fetchImageList() async throws -> [ImageMetadata] {
+        if userSettings.isLocalMode { return try localFetchImageList() }
         return try await executeWithTokenRefresh {
             guard let client = DropboxClientsManager.authorizedClient else {
                 print("❌ Dropbox: No authorized client available")
@@ -351,7 +463,13 @@ class DropboxService: ObservableObject {
             print("📂 Dropbox: Using cached keyword tree")
             return cached
         }
-        
+
+        if userSettings.isLocalMode {
+            let tree = try localFetchKeywords()
+            await MainActor.run { cachedKeywordTree = tree }
+            return tree
+        }
+
         let keywordTree = try await executeWithTokenRefresh {
             guard let client = DropboxClientsManager.authorizedClient else {
                 throw DropboxError.notAuthenticated
@@ -438,6 +556,11 @@ class DropboxService: ObservableObject {
     // MARK: - Keywords Save
     
     func saveKeywords(_ keywordTree: KeywordTree) async throws {
+        if userSettings.isLocalMode {
+            try localSaveKeywords(keywordTree)
+            await MainActor.run { cachedKeywordTree = keywordTree }
+            return
+        }
         try await executeWithTokenRefresh {
             guard let client = DropboxClientsManager.authorizedClient else {
                 print("📂 Dropbox: Not authenticated, cannot save keywords")
@@ -498,6 +621,7 @@ class DropboxService: ObservableObject {
     // MARK: - Image Upload
     
     func uploadImage(imageData: Data, filename: String, title: String?) async throws -> String {
+        if userSettings.isLocalMode { return try localUploadImage(imageData: imageData, filename: filename) }
         return try await executeWithTokenRefresh {
             guard let client = DropboxClientsManager.authorizedClient else {
                 throw DropboxError.notAuthenticated
@@ -555,6 +679,16 @@ class DropboxService: ObservableObject {
     // MARK: - Image Download
     
     func downloadImage(metadata: ImageMetadata, to localURL: URL) async throws {
+        if userSettings.isLocalMode {
+            // In local mode, dropboxPath is the full local file path — copy it to the cache location
+            let sourceURL = URL(fileURLWithPath: metadata.dropboxPath)
+            let fm = FileManager.default
+            if fm.fileExists(atPath: localURL.path) {
+                try fm.removeItem(at: localURL)
+            }
+            try fm.copyItem(at: sourceURL, to: localURL)
+            return
+        }
         try await executeWithTokenRefresh {
             guard let client = DropboxClientsManager.authorizedClient else {
                 throw DropboxError.notAuthenticated
@@ -583,6 +717,7 @@ class DropboxService: ObservableObject {
     }
     
     func downloadImageData(path: String) async throws -> Data? {
+        if userSettings.isLocalMode { return try localDownloadImageData(path: path) }
         return try await executeWithTokenRefresh {
             guard let client = DropboxClientsManager.authorizedClient else {
                 throw DropboxError.notAuthenticated
@@ -610,6 +745,7 @@ class DropboxService: ObservableObject {
     // MARK: - Image Deletion
     
     func deleteImages(filenames: [String]) async throws {
+        if userSettings.isLocalMode { try localDeleteImages(filenames: filenames); return }
         try await executeWithTokenRefresh {
             guard let client = DropboxClientsManager.authorizedClient else {
                 throw DropboxError.notAuthenticated
@@ -894,6 +1030,7 @@ class DropboxService: ObservableObject {
     // MARK: - File Upload
     
     func uploadFile(data: Data, filename: String) async throws {
+        if userSettings.isLocalMode { _ = try localUploadImage(imageData: data, filename: filename); return }
         try await executeWithTokenRefresh {
             guard let client = DropboxClientsManager.authorizedClient else {
                 throw DropboxError.notAuthenticated

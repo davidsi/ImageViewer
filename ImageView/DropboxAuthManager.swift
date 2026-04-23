@@ -18,6 +18,7 @@ class DropboxAuthManager: ObservableObject {
     @Published var userName: String?
     
     private let userSettings = UserSettings.shared
+    private var cancellables = Set<AnyCancellable>()
     
     // Track if user explicitly logged out to prevent auto-login
     //
@@ -40,7 +41,26 @@ class DropboxAuthManager: ObservableObject {
     
     init() {
         setupDropboxSDK()
+        // If local mode was active from a previous session, restore authenticated state immediately
+        if UserSettings.shared.isLocalMode && UserSettings.shared.localFolderURL != nil {
+            isAuthenticated = true
+        }
         checkExistingCredentials()
+
+        // Mirror local-mode changes into isAuthenticated
+        userSettings.$isLocalMode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] localMode in
+                guard let self else { return }
+                if localMode {
+                    // Switching to local mode: authenticated if folder is available
+                    self.isAuthenticated = UserSettings.shared.localFolderURL != nil
+                } else {
+                    // Switching back to Dropbox mode: authenticated if Dropbox client exists
+                    self.isAuthenticated = DropboxClientsManager.authorizedClient != nil
+                }
+            }
+            .store(in: &cancellables)
     }
     
     private func setupDropboxSDK() {

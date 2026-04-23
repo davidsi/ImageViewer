@@ -8,6 +8,7 @@
 import SwiftUI
 #if os(macOS)
 import CloudKit
+import UniformTypeIdentifiers
 #endif
 
 struct AuthenticationView: View {
@@ -20,6 +21,10 @@ struct AuthenticationView: View {
     #endif
     
     @EnvironmentObject private var dropboxAuthManager: DropboxAuthManager
+    @ObservedObject private var userSettings = UserSettings.shared
+    #if os(macOS)
+    @State private var showingLocalFolderPicker = false
+    #endif
     
     var body: some View {
         ScrollView {
@@ -211,6 +216,153 @@ struct AuthenticationView: View {
                 .padding()
                 .background(Color.blue.opacity(0.1))
                 .cornerRadius(12)
+
+                #if os(macOS)
+                // Local Folder Section
+                VStack(spacing: 16) {
+                    HStack {
+                        Image(systemName: "internaldrive")
+                            .font(.title2)
+                        Text("Local Folder (Offline Mode)")
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                        Spacer()
+                    }
+
+                    Text("Use a local folder instead of Dropbox. Images and keywords are read/written directly from disk — useful when files are already downloaded from Dropbox and you are offline.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.leading)
+
+                    if userSettings.isLocalMode, let url = userSettings.localFolderURL {
+                        // Active local mode
+                        VStack(spacing: 8) {
+                            HStack {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                Text("Offline mode active")
+                                    .foregroundColor(.green)
+                                    .fontWeight(.medium)
+                                Spacer()
+                            }
+                            Text(url.path)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                            HStack {
+                                Button {
+                                    showingLocalFolderPicker = true
+                                } label: {
+                                    Label("Change Folder", systemImage: "folder.badge.gear")
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button {
+                                    userSettings.disableLocalMode()
+                                    DropboxService.shared.invalidateKeywordCache()
+                                } label: {
+                                    Label("Switch to Dropbox", systemImage: "arrow.triangle.2.circlepath")
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button(role: .destructive) {
+                                    userSettings.clearLocalFolder()
+                                    DropboxService.shared.invalidateKeywordCache()
+                                } label: {
+                                    Label("Forget Folder", systemImage: "trash")
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    } else if userSettings.hasLocalFolder, let url = userSettings.localFolderURL {
+                        // Has a saved folder but currently in Dropbox mode
+                        VStack(spacing: 8) {
+                            HStack {
+                                Image(systemName: "internaldrive")
+                                    .foregroundColor(.indigo)
+                                Text("Saved folder:")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                            }
+                            Text(url.path)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                            HStack {
+                                Button {
+                                    userSettings.enableLocalMode()
+                                    DropboxService.shared.invalidateKeywordCache()
+                                } label: {
+                                    Label("Use Local Folder", systemImage: "internaldrive")
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.indigo)
+
+                                Button {
+                                    showingLocalFolderPicker = true
+                                } label: {
+                                    Label("Change", systemImage: "folder.badge.gear")
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button(role: .destructive) {
+                                    userSettings.clearLocalFolder()
+                                    DropboxService.shared.invalidateKeywordCache()
+                                } label: {
+                                    Label("Forget", systemImage: "trash")
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    } else {
+                        // No folder saved yet
+                        Button {
+                            showingLocalFolderPicker = true
+                        } label: {
+                            Label("Choose Local Folder…", systemImage: "folder.badge.plus")
+                                .font(.headline)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.indigo)
+                    }
+                }
+                .padding()
+                .background(Color.indigo.opacity(0.08))
+                .cornerRadius(12)
+                .fileImporter(
+                    isPresented: $showingLocalFolderPicker,
+                    allowedContentTypes: [.folder],
+                    allowsMultipleSelection: false
+                ) { result in
+                    Task { @MainActor in
+                        if case .success(let urls) = result, let url = urls.first {
+                            UserSettings.shared.setLocalFolderURL(url)
+                            DropboxService.shared.invalidateKeywordCache()
+                        }
+                    }
+                }
+                #endif
             }
             .padding()
         }
