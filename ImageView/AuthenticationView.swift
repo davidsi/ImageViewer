@@ -363,6 +363,14 @@ struct AuthenticationView: View {
                     }
                 }
                 #endif
+
+                // Build info
+                let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+                let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+                Text("Version \(version) (\(build))")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .padding(.top, 8)
             }
             .padding()
         }

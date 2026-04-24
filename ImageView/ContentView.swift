@@ -82,16 +82,25 @@ struct ContentView: View {
                 .disabled(false)
             NavigationLink("Images", value: SidebarSelection.images)
                 .disabled(!dropboxAuthManager.isAuthenticated)
+            #if os(iOS)
+            if UIDevice.current.userInterfaceIdiom != .phone {
+                NavigationLink("Keyword edit", value: SidebarSelection.keywordEdit)
+                    .disabled(!dropboxAuthManager.isAuthenticated)
+            }
+            #else
             NavigationLink("Keyword edit", value: SidebarSelection.keywordEdit)
                 .disabled(!dropboxAuthManager.isAuthenticated)
+            #endif
             #if os(macOS)
             NavigationLink("iCloud Photos", value: SidebarSelection.iCloudPhotos)
                 .disabled(!dropboxAuthManager.isAuthenticated) // Only require Dropbox, not iCloud
             NavigationLink("Local Drive", value: SidebarSelection.localDrive)
                 .disabled(!dropboxAuthManager.isAuthenticated)
             #else
-            NavigationLink("Photos", value: SidebarSelection.localDrive)
-                .disabled(false)
+            if UIDevice.current.userInterfaceIdiom != .phone {
+                NavigationLink("Photos", value: SidebarSelection.localDrive)
+                    .disabled(false)
+            }
             #endif
             
             #if os(macOS)
