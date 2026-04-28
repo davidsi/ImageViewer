@@ -25,7 +25,11 @@ struct ImagesView: View {
     @State private var selectedKeywords: [String] = []
     @State private var availableKeywords: [String] = []
     @State private var keywordTree: KeywordTree? = nil
+    #if os(iOS)
+    @State private var sidebarWidth: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? 130 : 200
+    #else
     @State private var sidebarWidth: CGFloat = 200
+    #endif
     @State private var imageWidth: CGFloat = UserDefaults.standard.object(forKey: "ImageWidth") as? CGFloat ?? 250
     @State private var isSelectionMode = false
     @State private var selectedImages = Set<String>()
@@ -194,152 +198,61 @@ struct ImagesView: View {
                 }
             }
 #else
-            // Use horizontal layout for iPad, vertical for iPhone
-            if UIDevice.current.userInterfaceIdiom == .pad {
-                ResizableSidebarView(
-                    keywordTree: dropboxService.cachedKeywordTree,
-                    selectedKeywords: $selectedKeywords,
-                    searchText: $searchText,
-                    invertResults: $invertResults,
-                    useOrMode: $useOrMode,
-                    filteredImages: filteredImages,
-                    isLoading: isLoading,
-                    errorMessage: errorMessage,
-                    imageWidth: $imageWidth,
-                    sidebarWidth: $sidebarWidth,
-                    isSelectionMode: $isSelectionMode,
-                    selectedImages: $selectedImages,
-                    showKeywordsOnHover: $showKeywordsOnHover,
-                    loadImagesAction: { Task { await loadImages() } },
-                    onImageWidthChanged: { width in
-                        UserDefaults.standard.set(width, forKey: "ImageWidth")
-                    },
-                    onKeywordToggle: { keyword in
-                        toggleKeywordForSelectedImages(keyword)
-                    },
-                    onCollectCheckedKeywords: collectCheckedKeywords,
-                    dropboxService: dropboxService,
-                    onEnterGroupViewMode: { filename in
-                        print("🔍 Group Debug: Checking groups for image: \(filename)")
-                        print("🔍 Group Debug: Total cached groups: \(dropboxService.cachedGroups.count)")
-                        
-                        let containingGroups = dropboxService.getGroupsContainingImages([filename])
-                        print("🔍 Group Debug: Found \(containingGroups.count) groups containing \(filename)")
-                        
-                        if let firstGroup = containingGroups.first {
-                            print("🔍 Group Debug: Entering group view with \(firstGroup.count) images: \(firstGroup.joined(separator: ", "))")
-                            currentGroupImages = firstGroup
-                            isGroupViewMode = true
-                            isSelectionMode = false
-                            selectedImages.removeAll()
-                        } else {
-                            print("🔍 Group Debug: No groups found for image \(filename)")
-                        }
-                    },
-                    onExitGroupViewMode: {
-                        isGroupViewMode = false
-                        currentGroupImages = []
+            // iOS: keywords sidebar to the LEFT of images (same layout for iPad and iPhone)
+            ResizableSidebarView(
+                keywordTree: dropboxService.cachedKeywordTree,
+                selectedKeywords: $selectedKeywords,
+                searchText: $searchText,
+                invertResults: $invertResults,
+                useOrMode: $useOrMode,
+                filteredImages: filteredImages,
+                isLoading: isLoading,
+                errorMessage: errorMessage,
+                imageWidth: $imageWidth,
+                sidebarWidth: $sidebarWidth,
+                isSelectionMode: $isSelectionMode,
+                selectedImages: $selectedImages,
+                showKeywordsOnHover: $showKeywordsOnHover,
+                loadImagesAction: { Task { await loadImages() } },
+                onImageWidthChanged: { width in
+                    UserDefaults.standard.set(width, forKey: "ImageWidth")
+                },
+                onKeywordToggle: { keyword in
+                    toggleKeywordForSelectedImages(keyword)
+                },
+                onCollectCheckedKeywords: collectCheckedKeywords,
+                dropboxService: dropboxService,
+                onEnterGroupViewMode: { filename in
+                    print("🔍 Group Debug: Checking groups for image: \(filename)")
+                    print("🔍 Group Debug: Total cached groups: \(dropboxService.cachedGroups.count)")
+                    
+                    let containingGroups = dropboxService.getGroupsContainingImages([filename])
+                    print("🔍 Group Debug: Found \(containingGroups.count) groups containing \(filename)")
+                    
+                    if let firstGroup = containingGroups.first {
+                        print("🔍 Group Debug: Entering group view with \(firstGroup.count) images: \(firstGroup.joined(separator: ", "))")
+                        currentGroupImages = firstGroup
+                        isGroupViewMode = true
+                        isSelectionMode = false
+                        selectedImages.removeAll()
+                    } else {
+                        print("🔍 Group Debug: No groups found for image \(filename)")
                     }
-                )
-                .frame(minHeight: 300)
-                .navigationTitle("Images")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        RefreshButton(isLoading: isLoading) {
-                            Task { await loadImages() }
-                        }
+                },
+                onExitGroupViewMode: {
+                    isGroupViewMode = false
+                    currentGroupImages = []
+                }
+            )
+            .navigationTitle("Images")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    RefreshButton(isLoading: isLoading) {
+                        Task { await loadImages() }
                     }
                 }
-            } else {
-                // iPhone vertical layout
-                NavigationView {
-                    VStack(spacing: 0) {
-                        // Search and Filter Controls
-                        VStack(spacing: 12) {
-                            // Search bar
-                            HStack {
-                                Image(systemName: "magnifyingglass")
-                                    .foregroundColor(.secondary)
-                                TextField("Search images...", text: $searchText)
-                                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                            }
-                            .padding(.horizontal)
-                            
-                            // Keyword filter chips
-                            if !availableKeywords.isEmpty {
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    LazyHStack(spacing: 8) {
-                                        ForEach(availableKeywords, id: \.self) { keyword in
-                                            KeywordChip(
-                                                keyword: keyword,
-                                                isSelected: selectedKeywords.contains(keyword)
-                                            ) {
-                                                toggleKeyword(keyword)
-                                            }
-                                        }
-                                    }
-                                    .padding(.horizontal)
-                                }
-                            }
-                        }
-                        .padding(.vertical, 8)
-                        
-                        Divider()
-                        
-                        // Main Content
-                        ImagesMainView(
-                            filteredImages: filteredImages,
-                            isLoading: isLoading,
-                            errorMessage: errorMessage,
-                            searchText: $searchText,
-                            selectedKeywords: $selectedKeywords,
-                            imageWidth: $imageWidth,
-                            isSelectionMode: $isSelectionMode,
-                            selectedImages: $selectedImages,
-                            showKeywordsOnHover: $showKeywordsOnHover,
-                            invertResults: $invertResults,
-                            loadImagesAction: { Task { await loadImages() } },
-                            onImageWidthChanged: { width in
-                                UserDefaults.standard.set(width, forKey: "ImageWidth")
-                            },
-                            onCollectCheckedKeywords: collectCheckedKeywords,
-                            dropboxService: dropboxService,
-                            isGroupViewMode: $isGroupViewMode,
-                            onExitGroupViewMode: {
-                                isGroupViewMode = false
-                                currentGroupImages = []
-                            },
-                            onEnterGroupViewMode: { filename in
-                                print("🔍 Group Debug: Checking groups for image: \(filename)")
-                                print("🔍 Group Debug: Total cached groups: \(dropboxService.cachedGroups.count)")
-                                
-                                let containingGroups = dropboxService.getGroupsContainingImages([filename])
-                                print("🔍 Group Debug: Found \(containingGroups.count) groups containing \(filename)")
-                                
-                                if let firstGroup = containingGroups.first {
-                                    print("🔍 Group Debug: Entering group view with \(firstGroup.count) images: \(firstGroup.joined(separator: ", "))")
-                                    currentGroupImages = firstGroup
-                                    isGroupViewMode = true
-                                    isSelectionMode = false
-                                    selectedImages.removeAll()
-                                } else {
-                                    print("🔍 Group Debug: No groups found for image \(filename)")
-                                }
-                            }
-                        )
-                    }
-                    .navigationTitle("Images")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            RefreshButton(isLoading: isLoading) {
-                                Task { await loadImages() }
-                            }
-                        }
-                    }
-                }
-            } // Close the else block for iPad/iPhone check 
+            }
 #endif
             } // Close the else block for isGroupViewMode  
         } // Close the Group block
